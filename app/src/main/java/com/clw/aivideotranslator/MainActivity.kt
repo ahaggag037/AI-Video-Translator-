@@ -210,12 +210,12 @@ private fun App() {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    "P0-D — الترجمة العربية والتوقيت",
+                    "P0-E — معاينة الترجمة على الفيديو",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "نحوّل أول دقيقة محليًا إلى WAV PCM أحادي القناة، ثم نرسل ملف الصوت فقط إلى NVIDIA لاختبار التفريغ والتوقيت. الفيديو نفسه لا يُرفع."
+                    "بعد نجاح STT والترجمة، نربط أزمنة العينة بخط الفيديو الأصلي ونشغّل الفيديو مع الترجمة العربية فوقه لاختبار المزامنة بصريًا قبل الانتقال للفيديو الكامل."
                 )
 
                 Button(
@@ -249,7 +249,14 @@ private fun App() {
                         val success = s.sttState as? SttState.Success
                         if (success != null) {
                             key(success) {
-                                TranslationCard(success.result, nvidiaApiKey)
+                                TranslationCard(
+                                    result = success.result,
+                                    apiKey = nvidiaApiKey,
+                                    sourceUri = s.uri,
+                                    videoDurationMs = s.metadata.durationMs
+                                        ?: SubtitlePipeline.SAMPLE_END_MS,
+                                    sampleStartMs = 0L,
+                                )
                             }
                         }
                     }
@@ -257,7 +264,7 @@ private fun App() {
 
                 InfoCard(
                     "حدود هذه البوابة",
-                    "النموذج الحالي لاختبار P0 هو ${NvidiaSttClient.MODEL_LABEL} لأن فيديو الاختبار إنجليزي ولأن واجهته الرسمية HTTP تعرض word timestamps. دعم المصادر متعددة اللغات سيبقى خلف Provider منفصل لاحقًا."
+                    "P0-E يختبر أول دقيقة فقط، وبداية العينة الحالية هي صفر على خط الفيديو. الهدف هو إثبات أن نفس timestamps تنتج SRT وتظهر فوق الفيديو في الموضع نفسه قبل بناء المعالجة الكاملة."
                 )
                 InfoCard(
                     "المفتاح",
