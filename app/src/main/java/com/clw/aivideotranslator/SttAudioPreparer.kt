@@ -257,7 +257,7 @@ object SttAudioPreparer {
             put("WAVE".toByteArray(Charsets.US_ASCII))
             put("fmt ".toByteArray(Charsets.US_ASCII))
             putInt(16)
-            putShort(1)
+            putShort(1.toShort())
             putShort(channels.toShort())
             putInt(sampleRateHz)
             putInt(byteRate)
