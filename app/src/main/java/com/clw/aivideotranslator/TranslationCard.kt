@@ -6,6 +6,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,14 +28,18 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.transformer.Transformer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@OptIn(UnstableApi::class)
 @Composable
 internal fun TranslationCard(
     result: NvidiaSttResult,
@@ -52,6 +58,13 @@ internal fun TranslationCard(
     var srt by remember { mutableStateOf<String?>(null) }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
+
+    var renderingVideo by remember { mutableStateOf(false) }
+    var renderProgress by remember { mutableStateOf<Int?>(null) }
+    var activeTransformer by remember { mutableStateOf<Transformer?>(null) }
+    var burnedVideo by remember { mutableStateOf<BurnedVideoResult?>(null) }
+    var pendingVideoSave by remember { mutableStateOf<File?>(null) }
+    var savingVideo by remember { mutableStateOf(false) }
 
     val save = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/x-subrip")
@@ -79,20 +92,56 @@ internal fun TranslationCard(
         }
     }
 
+    val saveVideo = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("video/mp4")
+    ) { uri ->
+        val snapshot = pendingVideoSave
+        pendingVideoSave = null
+        if (uri != null && snapshot != null) {
+            scope.launch {
+                savingVideo = true
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val output = context.contentResolver.openOutputStream(uri, "w")
+                            ?: error("تعذر فتح ملف حفظ الفيديو")
+                        output.use { target ->
+                            snapshot.inputStream().use { source -> source.copyTo(target) }
+                        }
+                    }
+                }
+                savingVideo = false
+                Toast.makeText(
+                    context,
+                    if (saved.isSuccess) "تم حفظ ${BurnedSubtitleExporter.DEFAULT_FILE_NAME} كفيديو MP4" else
+                        "تعذر حفظ الفيديو؛ ملف الرندر ما زال موجودًا داخل التطبيق",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    LaunchedEffect(activeTransformer, renderingVideo) {
+        while (isActive && renderingVideo) {
+            activeTransformer?.let { renderProgress = BurnedSubtitleExporter.progress(it) }
+            delay(500)
+        }
+    }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("الترجمة العربية — P0-E معاينة التزامن")
-            Text("الإصدار 0.1.3-p0e-preview")
+            Text("الترجمة العربية — P0-F تصدير MP4")
+            Text("الإصدار 0.1.4-p0f-hardburn")
             Text(NvidiaTranslationClient.MODEL_ID)
             Text(status)
             Button(
-                enabled = !busy && !exporting && pendingExport == null && apiKey.isNotBlank(),
+                enabled = !busy && !exporting && !renderingVideo && pendingExport == null && apiKey.isNotBlank(),
                 onClick = {
                     val keySnapshot = apiKey
                     busy = true
                     srt = null
                     cues = emptyList()
                     units = emptyList()
+                    burnedVideo = null
                     job = scope.launch {
                         try {
                             val source = SubtitlePipeline.sourceUnits(result.words)
@@ -111,7 +160,6 @@ internal fun TranslationCard(
                                 videoDurationMs = videoDurationMs,
                             )
                             val text = SubtitlePipeline.srt(presentationCues, videoDurationMs)
-                            // Publish only a completely validated translation snapshot.
                             cues = presentationCues
                             srt = text
                             status = "✓ اكتملت الترجمة وربط التوقيت بخط الفيديو وإنشاء SRT."
@@ -133,18 +181,113 @@ internal fun TranslationCard(
 
             val completedSrt = srt
             if (completedSrt != null) {
+                val sampleEndMs = minOf(videoDurationMs, sampleStartMs + SubtitlePipeline.SAMPLE_END_MS)
                 Text("✓ أزمنة SRT أصبحت على خط الفيديو الأصلي. بداية العينة الحالية = ${SubtitlePipeline.timestamp(sampleStartMs)}")
                 VideoSubtitlePreview(
                     sourceUri = sourceUri,
                     cues = cues,
                     sampleStartMs = sampleStartMs,
-                    sampleEndMs = minOf(videoDurationMs, sampleStartMs + SubtitlePipeline.SAMPLE_END_MS),
+                    sampleEndMs = sampleEndMs,
                 )
+
+                Text("ملف SRT ترجمة نصية فقط، وليس فيديو. الزر التالي ينشئ MP4 فعليًا مع العربية محروقة داخل الصورة.")
+                Button(
+                    enabled = !renderingVideo && !savingVideo && cues.isNotEmpty(),
+                    onClick = {
+                        renderingVideo = true
+                        renderProgress = null
+                        burnedVideo = null
+                        status = "جارٍ إنشاء MP4 مترجم لأول 60 ثانية…"
+                        runCatching {
+                            BurnedSubtitleExporter.start(
+                                context = context,
+                                sourceUri = sourceUri,
+                                cues = cues,
+                                sampleStartMs = sampleStartMs,
+                                sampleEndMs = sampleEndMs,
+                                onCompleted = { resultVideo ->
+                                    burnedVideo = resultVideo
+                                    renderingVideo = false
+                                    activeTransformer = null
+                                    renderProgress = 100
+                                    status = "✓ تم إنشاء فيديو MP4 مترجم والتحقق من وجود مسار فيديو صالح."
+                                },
+                                onError = { message ->
+                                    renderingVideo = false
+                                    activeTransformer = null
+                                    status = "فشل إنشاء MP4: $message"
+                                },
+                            )
+                        }.onSuccess { activeTransformer = it }
+                            .onFailure {
+                                renderingVideo = false
+                                activeTransformer = null
+                                status = "فشل بدء إنشاء MP4: ${it.message ?: "خطأ غير معروف"}"
+                            }
+                    },
+                ) { Text("إنشاء فيديو MP4 مترجم — أول 60 ثانية") }
+
+                if (renderingVideo) {
+                    Text(renderProgress?.let { "تقدم إنشاء الفيديو: $it%" } ?: "جارٍ تجهيز محرك الفيديو…")
+                    Button(onClick = {
+                        activeTransformer?.cancel()
+                        activeTransformer = null
+                        renderingVideo = false
+                        renderProgress = null
+                        status = "أُلغي إنشاء الفيديو. الترجمة وSRT ما زالا محفوظين في الذاكرة."
+                    }) { Text("إلغاء إنشاء الفيديو") }
+                }
+
+                burnedVideo?.let { rendered ->
+                    Text(
+                        "✓ MP4 جاهز: ${rendered.durationMs / 1000}s — " +
+                            String.format(java.util.Locale.ROOT, "%.1f MB", rendered.sizeBytes / 1_048_576.0)
+                    )
+                    Button(onClick = {
+                        val uri = FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.subtitles",
+                            rendered.file,
+                        )
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "video/mp4")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        runCatching { context.startActivity(intent) }
+                            .onFailure {
+                                Toast.makeText(context, "لا يوجد مشغل فيديو متاح", Toast.LENGTH_LONG).show()
+                            }
+                    }) { Text("تشغيل الفيديو MP4 المترجم") }
+
+                    Button(enabled = !savingVideo && pendingVideoSave == null, onClick = {
+                        pendingVideoSave = rendered.file
+                        saveVideo.launch(BurnedSubtitleExporter.DEFAULT_FILE_NAME)
+                    }) { Text("حفظ الفيديو MP4") }
+
+                    Button(enabled = !savingVideo, onClick = {
+                        val uri = FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.subtitles",
+                            rendered.file,
+                        )
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "video/mp4"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            clipData = ClipData.newRawUri(BurnedSubtitleExporter.DEFAULT_FILE_NAME, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        runCatching {
+                            context.startActivity(Intent.createChooser(intent, "مشاركة الفيديو MP4"))
+                        }.onFailure {
+                            Toast.makeText(context, "تعذر مشاركة الفيديو", Toast.LENGTH_LONG).show()
+                        }
+                    }) { Text("مشاركة الفيديو MP4") }
+                }
 
                 Button(enabled = !exporting && pendingExport == null, onClick = {
                     pendingExport = completedSrt
                     save.launch("sample_ar_video_timeline.srt")
-                }) { Text("حفظ SRT بخط الفيديو") }
+                }) { Text("حفظ SRT فقط") }
 
                 Button(enabled = !exporting, onClick = {
                     scope.launch {
@@ -152,7 +295,6 @@ internal fun TranslationCard(
                         val shared = runCatching {
                             val file = withContext(Dispatchers.IO) {
                                 val directory = File(context.cacheDir, "p0_subtitles").apply { mkdirs() }
-                                // Keep each shared snapshot separate so a later translation cannot overwrite it.
                                 val snapshot = File(directory, java.util.UUID.randomUUID().toString()).apply { mkdirs() }
                                 File(snapshot, "sample_ar_video_timeline.srt").apply {
                                     writeText(completedSrt, Charsets.UTF_8)
@@ -176,7 +318,7 @@ internal fun TranslationCard(
                             Toast.makeText(context, "تعذر مشاركة SRT", Toast.LENGTH_LONG).show()
                         }
                     }
-                }) { Text("مشاركة SRT بخط الفيديو") }
+                }) { Text("مشاركة SRT فقط") }
 
                 units.zip(cues).forEach { (unit, cue) ->
                     SelectionContainer {
