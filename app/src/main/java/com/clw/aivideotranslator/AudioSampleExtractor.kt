@@ -50,9 +50,6 @@ object AudioSampleExtractor {
             require(audioTrackIndex >= 0) { "الفيديو لا يحتوي على مسار صوت قابل للاستخراج" }
 
             val inputFormat = extractor.getTrackFormat(audioTrackIndex)
-            val mimeType = inputFormat.getString(MediaFormat.KEY_MIME)
-                ?: error("تعذر معرفة ترميز مسار الصوت")
-
             extractor.selectTrack(audioTrackIndex)
             extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
 
@@ -80,7 +77,6 @@ object AudioSampleExtractor {
             }
             val buffer = ByteBuffer.allocateDirect(maxOf(DEFAULT_BUFFER_BYTES, maxInputSize))
             val info = MediaCodec.BufferInfo()
-            var lastSourceTimeUs = firstSourceTimeUs
             var wroteAnySample = false
 
             while (true) {
@@ -94,10 +90,9 @@ object AudioSampleExtractor {
                 info.offset = 0
                 info.size = sampleSize
                 info.presentationTimeUs = sampleTimeUs - firstSourceTimeUs
-                info.flags = extractor.sampleFlags
+                info.flags = toCodecBufferFlags(extractor.sampleFlags)
                 muxer.writeSampleData(outputTrackIndex, buffer, info)
                 wroteAnySample = true
-                lastSourceTimeUs = sampleTimeUs
 
                 if (!extractor.advance()) break
             }
@@ -121,7 +116,6 @@ object AudioSampleExtractor {
             retriever.release()
         }
 
-        // Re-open only to obtain source timing information from the selected track.
         val timingExtractor = MediaExtractor()
         val (mimeType, sourceStartUs, sourceEndUs) = try {
             timingExtractor.setDataSource(context, sourceUri, null)
@@ -145,6 +139,21 @@ object AudioSampleExtractor {
             sourceEndUs = sourceEndUs,
             measuredDurationMs = measuredDurationMs,
         )
+    }
+
+    private fun toCodecBufferFlags(sampleFlags: Int): Int {
+        require(sampleFlags and MediaExtractor.SAMPLE_FLAG_ENCRYPTED == 0) {
+            "مسار الصوت محمي أو مشفر ولا يدعمه اختبار P0-B الحالي"
+        }
+
+        var codecFlags = 0
+        if (sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+            codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_KEY_FRAME
+        }
+        if (sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
+            codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_PARTIAL_FRAME
+        }
+        return codecFlags
     }
 
     private fun findAudioTrack(extractor: MediaExtractor): Int {
