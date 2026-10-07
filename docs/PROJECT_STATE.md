@@ -69,7 +69,12 @@ Build a personal Android video translator using direct AI provider APIs. NVIDIA 
 ## P0-D — Arabic translation + timed subtitles
 - Branch: `build/p0d-arabic-subtitles`, based on P0-C commit `fc4d168365bbae76301941de8abcc7aea1c68df7`.
 - Inspected latest baseline successful CI `37633708767`: tests, lint, APK assembly and artifact upload all passed.
-- IMPLEMENTED; new CI result pending. PROVIDER/DEVICE UNVERIFIED for translation.
+- IMPLEMENTED + CI TESTED + LINT PASSED + APK ARTIFACT VERIFIED. PROVIDER/DEVICE UNVERIFIED for translation.
+- P0-D code commit: `19010f96614ed3f08a5e0ae19755d01e9379cfab`.
+- P0-D CI: https://github.com/ahaggag037/AI-Video-Translator-/actions/runs/37635678819 — SUCCESS. All 14 JUnit tests passed (0 failures/errors/skips); lint passed with 6 baseline/dependency warnings and no errors; debug APK assembly and signature verification passed (v2, one signer).
+- APK artifact ID: `11489481863`; report artifact ID: `11489501943`. Downloaded ZIP and APK ZIP integrity checks passed; local SHA-256 matches the checksum produced by CI.
+- APK SHA-256: `dbafb68234e452b2b511e2776b2776aa7bd7ab041e05f0782976aa4af9f87cca`; size 31,015,041 bytes. Delivery filename: `AI-Video-Translator-P0D.apk`.
+- GitHub compare confirmed P0-C media/STT source files unchanged. This verification note is documentation-only; the APK corresponds to the code commit above.
 - Model: `nvidia/riva-translate-4b-instruct-v2`, NVIDIA-hosted `POST https://integrate.api.nvidia.com/v1/chat/completions`, Bearer NVIDIA API key.
 - Selected after official documentation review on 2026-10-07: NVIDIA's model card explicitly lists Arabic, supports sentence/document translation and publishes English-to-Arabic evaluation. This is a decoder-only 4B translation LLM; documented Arabic support is not a live quality test of this sample.
 - Documented model context: 8K tokens. Endpoint max_tokens: 1–4096; prototype requests 1024, temperature 0, stream false, system `en-ar`, user source text.
