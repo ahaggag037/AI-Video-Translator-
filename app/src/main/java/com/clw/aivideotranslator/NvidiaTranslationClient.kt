@@ -121,8 +121,17 @@ object NvidiaTranslationClient {
                 invalidResponse("استجابة NVIDIA بدور غير متوقع؛ لم يتم إنشاء SRT")
             }
         }
+
+        // Some OpenAI-compatible NVIDIA responses include `tool_calls: []` even though no
+        // tool was invoked. Empty metadata is harmless; an actual non-empty tool call is not
+        // a translation result and must still be rejected.
         if (message.has("tool_calls") && !message.isNull("tool_calls")) {
-            invalidResponse("استجابة NVIDIA احتوت tool_calls غير متوقعة؛ لم يتم إنشاء SRT")
+            when (val toolCalls = message.opt("tool_calls")) {
+                is JSONArray -> if (toolCalls.length() > 0) {
+                    invalidResponse("استجابة NVIDIA احتوت tool_calls فعلية غير متوقعة؛ لم يتم إنشاء SRT")
+                }
+                else -> invalidResponse("استجابة NVIDIA احتوت tool_calls بصيغة غير متوقعة؛ لم يتم إنشاء SRT")
+            }
         }
 
         val text = extractTextContent(message.opt("content"))
