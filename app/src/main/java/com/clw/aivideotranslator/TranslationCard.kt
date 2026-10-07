@@ -69,7 +69,8 @@ internal fun TranslationCard(result: NvidiaSttResult, apiKey: String) {
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("الترجمة العربية — أول 60 ثانية")
+            Text("الترجمة العربية — أول 60 ثانية · HF2")
+            Text("الإصدار 0.1.1-p0d-hf2")
             Text(NvidiaTranslationClient.MODEL_ID)
             Text(status)
             Button(
