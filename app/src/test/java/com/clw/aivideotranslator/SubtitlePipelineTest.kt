@@ -68,6 +68,37 @@ class SubtitlePipelineTest {
         assertTrue(SubtitlePipeline.srt(cues).contains("00:01:00,000"))
     }
 
+    @Test fun presentationTimelineMappingUsesExplicitSampleOffsetWithoutRetiming() {
+        val relative = listOf(
+            ArabicSubtitleCue("u1", 80, 5_280, "الأول"),
+            ArabicSubtitleCue("u2", 5_440, 6_720, "الثاني"),
+        )
+        val mapped = SubtitlePipeline.toPresentationTimeline(relative, sampleStartMs = 120_000, videoDurationMs = 300_000)
+        assertEquals(120_080L, mapped[0].startMs)
+        assertEquals(125_280L, mapped[0].endMs)
+        assertEquals(125_440L, mapped[1].startMs)
+        assertEquals(126_720L, mapped[1].endMs)
+        assertEquals("الأول", mapped[0].text)
+        assertTrue(SubtitlePipeline.srt(mapped, 300_000).contains("00:02:00,080 --> 00:02:05,280"))
+    }
+
+    @Test fun presentationTimelineRejectsCuePastVideoEnd() {
+        val relative = listOf(ArabicSubtitleCue("u1", 0, 60_000, "نص"))
+        rejects { SubtitlePipeline.toPresentationTimeline(relative, 30_000, 80_000) }
+    }
+
+    @Test fun activeCueUsesSameBoundariesAsSrtTimeline() {
+        val cues = listOf(
+            ArabicSubtitleCue("u1", 80, 1000, "أ"),
+            ArabicSubtitleCue("u2", 1200, 2000, "ب"),
+        )
+        assertNull(SubtitlePipeline.activeCue(cues, 79))
+        assertEquals("u1", SubtitlePipeline.activeCue(cues, 80)?.sourceUnitId)
+        assertNull(SubtitlePipeline.activeCue(cues, 1000))
+        assertEquals("u2", SubtitlePipeline.activeCue(cues, 1200)?.sourceUnitId)
+        assertNull(SubtitlePipeline.activeCue(cues, 2000))
+    }
+
     @Test fun missingDuplicateAndUnknownIdsAreRejected() {
         val units = listOf(SourceUnit("u1", 80, 1000, "Hello"), SourceUnit("u2", 1100, 2000, "World"))
         rejects { SubtitlePipeline.cues(units, listOf(TranslationEntry("u1", "أهلًا"))) }
