@@ -84,8 +84,9 @@ object SttAudioPreparer {
 
             val info = MediaCodec.BufferInfo()
             var inputEnded = false
+            var sourceExhausted = false
             var outputEnded = false
-            var lastQueuedSourceTimeUs = sourceStartUs
+            var lastQueuedPresentationTimeUs = 0L
 
             while (!outputEnded) {
                 if (!inputEnded) {
@@ -96,13 +97,13 @@ object SttAudioPreparer {
                         inputBuffer.clear()
 
                         val sampleTimeUs = extractor.sampleTime
-                        val shouldEnd = sampleTimeUs < 0L || sampleTimeUs >= sourceStopUs
+                        val shouldEnd = sourceExhausted || sampleTimeUs < 0L || sampleTimeUs >= sourceStopUs
                         if (shouldEnd) {
                             decoder.queueInputBuffer(
                                 inputIndex,
                                 0,
                                 0,
-                                (lastQueuedSourceTimeUs - sourceStartUs).coerceAtLeast(0L),
+                                lastQueuedPresentationTimeUs,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM,
                             )
                             inputEnded = true
@@ -113,20 +114,21 @@ object SttAudioPreparer {
                                     inputIndex,
                                     0,
                                     0,
-                                    (lastQueuedSourceTimeUs - sourceStartUs).coerceAtLeast(0L),
+                                    lastQueuedPresentationTimeUs,
                                     MediaCodec.BUFFER_FLAG_END_OF_STREAM,
                                 )
                                 inputEnded = true
                             } else {
+                                val presentationTimeUs = sampleTimeUs - sourceStartUs
                                 decoder.queueInputBuffer(
                                     inputIndex,
                                     0,
                                     sampleSize,
-                                    sampleTimeUs - sourceStartUs,
+                                    presentationTimeUs,
                                     0,
                                 )
-                                lastQueuedSourceTimeUs = sampleTimeUs
-                                if (!extractor.advance()) inputEnded = true
+                                lastQueuedPresentationTimeUs = presentationTimeUs
+                                if (!extractor.advance()) sourceExhausted = true
                             }
                         }
                     }
