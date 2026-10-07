@@ -83,19 +83,70 @@ object NvidiaTranslationClient {
     }
 
     internal fun parseResponse(body: String): String {
-        try {
-            val choices = JSONObject(body).getJSONArray("choices")
-            require(choices.length() == 1)
-            val choice = choices.getJSONObject(0)
-            require(choice.getString("finish_reason") == "stop")
-            val message = choice.getJSONObject("message")
-            require(message.getString("role") == "assistant")
-            require(!message.has("tool_calls") || message.isNull("tool_calls"))
-            val text = message.get("content")
-            require(text is String)
-            return SubtitlePipeline.validateText(text)
-        } catch (_: Exception) {
-            error("استجابة ترجمة غير صالحة أو غير مكتملة؛ لم يتم إنشاء SRT")
+        val root = runCatching { JSONObject(body) }.getOrElse {
+            error("استجابة NVIDIA ليست JSON صالحًا؛ لم يتم إنشاء SRT")
+        }
+        val choices = root.optJSONArray("choices")
+            ?: error("استجابة NVIDIA بلا choices؛ لم يتم إنشاء SRT")
+        require(choices.length() > 0) { "استجابة NVIDIA بلا نتيجة ترجمة؛ لم يتم إنشاء SRT" }
+
+        val choice = (0 until choices.length())
+            .mapNotNull { index -> choices.optJSONObject(index) }
+            .firstOrNull { it.optJSONObject("message") != null }
+            ?: error("استجابة NVIDIA بلا message؛ لم يتم إنشاء SRT")
+
+        val finishReason = if (!choice.has("finish_reason") || choice.isNull("finish_reason")) {
+            null
+        } else {
+            choice.optString("finish_reason").trim().ifEmpty { null }
+        }
+        when (finishReason) {
+            null, "stop" -> Unit
+            "length" -> error("NVIDIA أوقفت الترجمة بسبب حد الطول؛ لم يتم إنشاء SRT")
+            "content_filter" -> error("NVIDIA أوقفت الترجمة بمرشح المحتوى؛ لم يتم إنشاء SRT")
+            else -> error("استجابة NVIDIA انتهت بحالة غير متوقعة ($finishReason)؛ لم يتم إنشاء SRT")
+        }
+
+        val message = choice.getJSONObject("message")
+        if (message.has("role") && !message.isNull("role")) {
+            val role = message.optString("role").trim()
+            require(role.isEmpty() || role == "assistant") {
+                "استجابة NVIDIA بدور غير متوقع؛ لم يتم إنشاء SRT"
+            }
+        }
+        require(!message.has("tool_calls") || message.isNull("tool_calls")) {
+            "استجابة NVIDIA احتوت tool_calls غير متوقعة؛ لم يتم إنشاء SRT"
+        }
+
+        val text = extractTextContent(message.opt("content"))
+        return SubtitlePipeline.validateText(text)
+    }
+
+    private fun extractTextContent(content: Any?): String {
+        return when (content) {
+            is String -> content
+            is JSONArray -> buildString {
+                for (index in 0 until content.length()) {
+                    when (val part = content.opt(index)) {
+                        is String -> append(part)
+                        is JSONObject -> {
+                            val type = part.optString("type")
+                            val text = part.opt("text")
+                            if (text is String && (type.isBlank() || type == "text" || type == "output_text")) {
+                                append(text)
+                            }
+                        }
+                    }
+                }
+            }
+            is JSONObject -> {
+                val text = content.opt("text")
+                require(text is String) { "استجابة NVIDIA بلا نص ترجمة؛ لم يتم إنشاء SRT" }
+                text
+            }
+            else -> error("استجابة NVIDIA بلا نص ترجمة؛ لم يتم إنشاء SRT")
+        }.also {
+            require(it.isNotBlank()) { "استجابة NVIDIA بلا نص ترجمة؛ لم يتم إنشاء SRT" }
         }
     }
 }
