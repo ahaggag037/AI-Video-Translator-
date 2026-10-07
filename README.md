@@ -1,37 +1,9 @@
 # AI Video Translator
 
-Personal Android app for AI-assisted video translation.
+Personal Android prototype. P0-A/P0-B and NVIDIA P0-C are device verified; see docs/PROJECT_STATE.md for evidence.
 
-## Current state
+P0-D adds first-minute English-to-Arabic translation through NVIDIA, timed bilingual unit preview, and UTF-8 sample_ar.srt save/share. Enter your NVIDIA key on-device; no key is embedded or persisted. Translation and SRT require successful timestamped STT. Live P0-D device/provider verification is pending.
 
-**P0-A: CI-tested on `build/p0-prototype`** — select a video through `ACTION_OPEN_DOCUMENT`, request persistable read access when supported, and probe basic metadata locally.
+Build baseline is unchanged: AGP 9.4.0, Gradle 9.6.0, JDK 17, compile/target SDK 36, min SDK 29, Compose BOM 2026.06.01, OkHttp 5.3.2.
 
-No video/audio is uploaded in this build. NVIDIA NIM integration starts after the audio/timeline prototype gate.
-
-## Verified build baseline
-
-- Android Gradle Plugin: 9.4.0
-- Gradle: 9.6.0
-- JDK: 17
-- compileSdk / targetSdk: 36
-- minSdk: 29
-- Compose BOM: 2026.06.01
-
-CI runs:
-
-```bash
-gradle --stacktrace testDebugUnitTest
-gradle --stacktrace lintDebug
-gradle --stacktrace assembleDebug
-```
-
-The debug APK is verified to exist and is uploaded as a GitHub Actions artifact when CI succeeds.
-
-## Verification state
-
-- Source implemented: yes
-- Unit tests: passed
-- Android lint: passed
-- Debug APK assembly: passed
-- APK artifact: produced
-- Device installation / behavior: not yet verified
+CI executes testDebugUnitTest, lintDebug and assembleDebug; verifies APK signature; uploads APK, SHA-256 and test/lint reports. Test data is synthetic, not a claim of translating the real sample.

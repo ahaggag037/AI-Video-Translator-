@@ -66,11 +66,29 @@ Build a personal Android video translator using direct AI provider APIs. NVIDIA 
 - P0-C live NVIDIA request/response: `PROVIDER + DEVICE VERIFIED`.
 - P0-C current response parser / word timestamp contract: `PROVIDER VERIFIED` for the tested Parakeet one-minute English path.
 
-## Next valid action — P0-D translation gate
-1. Keep STT and translation as separate stages; timestamps remain owned by STT.
-2. Convert the 217 timestamped words into stable subtitle-style source cues with IDs, start/end times, and English text.
-3. Send a small batch of those cues to NVIDIA's OpenAI-compatible LLM chat-completions endpoint for English -> Arabic translation.
-4. Require the translation response to return the same cue IDs/count and Arabic text only; translation must not alter timestamps.
-5. Validate IDs/count programmatically and fail safely on malformed model output.
-6. Display the Arabic translation beside the original cue timing on the phone.
-7. Once a live translation request succeeds on-device, promote P0-D and then generate/export the first SRT from the same cue model.
+## P0-D — Arabic translation + timed subtitles
+- Branch: `build/p0d-arabic-subtitles`, based on P0-C commit `fc4d168365bbae76301941de8abcc7aea1c68df7`.
+- Inspected latest baseline successful CI `37633708767`: tests, lint, APK assembly and artifact upload all passed.
+- IMPLEMENTED; new CI result pending. PROVIDER/DEVICE UNVERIFIED for translation.
+- Model: `nvidia/riva-translate-4b-instruct-v2`, NVIDIA-hosted `POST https://integrate.api.nvidia.com/v1/chat/completions`, Bearer NVIDIA API key.
+- Selected after official documentation review on 2026-10-07: NVIDIA's model card explicitly lists Arabic, supports sentence/document translation and publishes English-to-Arabic evaluation. This is a decoder-only 4B translation LLM; documented Arabic support is not a live quality test of this sample.
+- Documented model context: 8K tokens. Endpoint max_tokens: 1–4096; prototype requests 1024, temperature 0, stream false, system `en-ar`, user source text.
+- No model-specific JSON-schema/response_format guarantee is documented in the inspected endpoint. Therefore ADR-003 replaces the earlier planned batch/echo-ID contract with one text-only request per unit. IDs/count are assigned and validated locally; no timing or ID is sent to or read from the model.
+- Requests are sequential, separated by 1.5 seconds (local pacing, not a claimed provider quota). Free endpoint documents possible throttling; account-specific numeric quotas remain unknown. 401/403/429/202 and other non-200 statuses fail visibly; no automatic billable retries. 202 polling is not implemented in this prototype.
+- Deterministic segmentation: sentence punctuation, >=700ms pause, up to 16 words / 160 characters / 6 seconds where a word boundary permits. Individual words are never split. Every input word is retained exactly once. Invalid, missing, overlapping, nonpositive or >60000ms times fail, never get clamped or invented.
+- SourceUnit IDs and sample-relative millisecond boundaries are local immutable values. TranslationEntry is separate; ArabicSubtitleCue derives its timing exclusively from SourceUnit. The V2 presentation-time microsecond model is still future work; this gate exports the WAV sample clock without claiming full-video synchronization.
+- Complete validated output is displayed with English, Arabic and millisecond start/end values. SRT uses ASCII clock digits and UTF-8 Arabic. Save uses Android CreateDocument; share uses a restricted FileProvider and a unique cache snapshot named sample_ar.srt.
+- Partial/cancelled/malformed/truncated responses do not enable SRT export. Changing source or rerunning STT removes the translation UI and cancels its coroutine/HTTP call. No translation key is persisted or logged.
+- Existing NvidiaSttClient.kt, SttAudioPreparer.kt, AudioSampleExtractor.kt, VideoProbe.kt and VideoMetadata.kt are unchanged.
+- CI now retains test/lint reports, verifies the debug APK signature and publishes its SHA-256 alongside the APK. Version: 0.1.0-p0d (code 2).
+- Tests cover segmentation boundaries, invalid timing, complete synthetic 217-word timing preservation (80–60000ms), ID/count validation, Arabic-locale SRT, UTF-8, malformed/truncated translation responses, request contract and the unchanged STT parser with a synthetic fixture.
+- No real transcript/audio or NVIDIA credential is present in this checkout/session. Consequently no real-sample Arabic SRT or live NVIDIA translation is claimed. The first genuine sample_ar.srt is generated on the phone after its live translation succeeds.
+
+### Official evidence reviewed 2026-10-07
+- Model inventory/endpoint: https://docs.api.nvidia.com/nim/reference/llm-apis
+- Model card/Arabic/context/prompt: https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v2/modelcard
+- Request contract/auth/output limits: https://docs.api.nvidia.com/nim/reference/nvidia-riva-translate-4b-instruct-v2-infer
+- Hosted availability/throttling notice: https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v2
+
+### Remaining acceptance gate
+Install new APK; select the same video; run STT; translate; check Arabic meaning, cue start/end equality, RTL readability, save/share and open sample_ar.srt. Check cancellation, retry after failure and changing source. Rotation/process death intentionally loses screen state in this P0 prototype. Debug signing continuity with the already installed APK is not guaranteed by the existing ephemeral CI signing setup; installation/update must be device-checked.

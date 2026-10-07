@@ -32,6 +32,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -209,7 +210,7 @@ private fun App() {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    "P0-C — NVIDIA STT والتوقيت",
+                    "P0-D — الترجمة العربية والتوقيت",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
@@ -219,6 +220,10 @@ private fun App() {
 
                 Button(
                     onClick = { picker.launch(arrayOf("video/*")) },
+                    enabled = (state as? HomeState.Ready)?.let {
+                        it.sampleState !is SampleState.Extracting &&
+                            it.sttState !is SttState.PreparingAudio && it.sttState !is SttState.Sending
+                    } ?: true,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("اختيار فيديو")
@@ -241,6 +246,12 @@ private fun App() {
                             onApiKeyChange = { nvidiaApiKey = it },
                             onRun = { runNvidiaSttTest(s) },
                         )
+                        val success = s.sttState as? SttState.Success
+                        if (success != null) {
+                            key(success) {
+                                TranslationCard(success.result, nvidiaApiKey)
+                            }
+                        }
                     }
                 }
 

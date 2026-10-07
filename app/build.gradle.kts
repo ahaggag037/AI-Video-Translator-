@@ -11,8 +11,8 @@ android {
         applicationId = "com.clw.aivideotranslator"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-p0"
+        versionCode = 2
+        versionName = "0.1.0-p0d"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -52,4 +52,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
