@@ -11,8 +11,8 @@ android {
         applicationId = "com.clw.aivideotranslator"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.1.3-p0e-preview"
+        versionCode = 6
+        versionName = "0.1.4-p0f-hardburn"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -48,6 +48,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    implementation("androidx.media3:media3-transformer:1.11.1")
+    implementation("androidx.media3:media3-effect:1.11.1")
+    implementation("androidx.media3:media3-common:1.11.1")
 
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
 
