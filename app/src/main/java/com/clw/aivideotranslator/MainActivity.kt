@@ -350,7 +350,8 @@ private fun SttCard(
                 }
                 is SttState.Error -> {
                     Text("فشل الاختبار: ${state.message}")
-                    state.profile?.let(::AudioProfileDetails)
+                    val profile = state.profile
+                    if (profile != null) AudioProfileDetails(profile)
                 }
                 is SttState.Success -> {
                     Text("✓ نجح NVIDIA STT.")
