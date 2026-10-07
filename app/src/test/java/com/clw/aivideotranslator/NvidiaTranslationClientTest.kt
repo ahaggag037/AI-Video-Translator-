@@ -1,5 +1,6 @@
 package com.clw.aivideotranslator
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -19,21 +20,67 @@ class NvidiaTranslationClientTest {
         listOf("startMs", "endMs", "sourceUnitId", "apiKey").forEach { assertFalse(body.contains(it)) }
     }
 
-    private fun response(content: Any, finish: String = "stop"): String =
-        JSONObject().put("choices", org.json.JSONArray().put(JSONObject()
-            .put("finish_reason", finish)
-            .put("message", JSONObject().put("role", "assistant").put("content", content)))).toString()
+    private fun response(
+        content: Any,
+        finish: Any? = "stop",
+        includeRole: Boolean = true,
+    ): String {
+        val message = JSONObject().put("content", content)
+        if (includeRole) message.put("role", "assistant")
+        val choice = JSONObject().put("message", message)
+        if (finish != null) choice.put("finish_reason", finish)
+        return JSONObject().put("choices", JSONArray().put(choice)).toString()
+    }
 
-    @Test fun readsOnlyCompletedText() {
+    @Test fun readsCompletedScalarText() {
         assertEquals("مرحبًا بالعالم.", NvidiaTranslationClient.parseResponse(response("مرحبًا بالعالم.")))
     }
 
+    @Test fun acceptsProviderEnvelopeWithoutFinishReasonOrRole() {
+        assertEquals(
+            "مرحبًا بالعالم.",
+            NvidiaTranslationClient.parseResponse(response("مرحبًا بالعالم.", finish = null, includeRole = false)),
+        )
+    }
+
+    @Test fun acceptsOpenAiStyleTextParts() {
+        val parts = JSONArray()
+            .put(JSONObject().put("type", "text").put("text", "مرحبًا "))
+            .put(JSONObject().put("type", "text").put("text", "بالعالم."))
+        assertEquals("مرحبًا بالعالم.", NvidiaTranslationClient.parseResponse(response(parts)))
+    }
+
     @Test fun rejectsTruncationBlankMalformedAndNonText() {
-        val invalid = listOf(response("مرحبًا", "length"), response(" "), response(42),
-            "{}", "not-json", response("00:00:01,000 --> 00:00:02,000"))
+        val invalid = listOf(
+            response("مرحبًا", "length"),
+            response(" "),
+            response(42),
+            "{}",
+            "not-json",
+            response("00:00:01,000 --> 00:00:02,000"),
+        )
         invalid.forEach {
-            try { NvidiaTranslationClient.parseResponse(it); fail("Must reject invalid output") }
-            catch (_: IllegalStateException) { }
+            try {
+                NvidiaTranslationClient.parseResponse(it)
+                fail("Must reject invalid output")
+            } catch (_: IllegalStateException) {
+                // expected
+            }
+        }
+    }
+
+    @Test fun rejectsUnexpectedRoleAndCompletionReason() {
+        val wrongRole = JSONObject().put("choices", JSONArray().put(JSONObject()
+            .put("finish_reason", "stop")
+            .put("message", JSONObject().put("role", "tool").put("content", "مرحبًا"))))
+            .toString()
+        listOf(wrongRole, response("مرحبًا", "tool_calls"), response("مرحبًا", "content_filter")).forEach {
+            try {
+                NvidiaTranslationClient.parseResponse(it)
+                fail("Must reject unsafe/incomplete envelope")
+            } catch (_: IllegalStateException) {
+                // expected
+            }
         }
     }
 
