@@ -26,14 +26,15 @@ Build a personal Android video translator using direct AI provider APIs. NVIDIA 
 - P0-B APK SHA-256: `3e0517f5fe7194230a051e04f52881e828f55bffb438976814dc7a2e5bc49bb6`.
 
 ### P0-C — NVIDIA STT / timestamp gate
-- Local STT WAV preparation: IMPLEMENTED on `build/p0c-nvidia-stt`.
+- Local STT WAV preparation: IMPLEMENTED + DEVICE VERIFIED.
 - The app decodes up to the first 60 seconds with `MediaExtractor` + `MediaCodec`, streams decoder PCM, downmixes to mono, and writes a PCM 16-bit WAV in app cache. No full media file is loaded into RAM.
 - Decoder end-of-stream handling was corrected so a source shorter than the requested sample does not leave the codec waiting indefinitely.
-- NVIDIA HTTP prototype client: IMPLEMENTED, but NOT LIVE-PROVIDER-VERIFIED yet.
+- NVIDIA HTTP prototype client: IMPLEMENTED + LIVE PROVIDER VERIFIED on the target Android phone.
 - Prototype model: `NVIDIA Parakeet CTC 1.1B (en-US)` for the current English test video.
 - Request path: local WAV only -> NVIDIA HTTP transcription endpoint with `language=en-US` and word time offsets requested. The video itself is not uploaded.
 - NVIDIA API key is entered by the user in-app and held in screen memory for this prototype only; it is not committed to GitHub, embedded in the APK, or persisted to disk yet.
-- Live response JSON shape, transcript correctness, and word timestamp semantics remain DEVICE/PROVIDER-UNVERIFIED until a request succeeds with the user's NVIDIA key.
+- Real-device/provider evidence on 2026-10-07: NVIDIA STT success state displayed `WAV PCM 16-bit mono`, sample rate `44100 Hz`, duration `01:00`, WAV size `5.0 MB`, `217` words, first word timestamp `80 ms`, last word timestamp `60000 ms`, and a coherent English transcript.
+- The successful live response proves the current HTTP request contract, parser path, and word-timestamp normalization work end-to-end on the target phone for this one-minute English gate. Transcript semantic accuracy against the source audio has not been formally audited word-for-word.
 - OkHttp `5.5.0` was rejected after CI proved it requires compileSdk 37; project baseline remains compileSdk 36. P0-C uses OkHttp `5.3.2`, which passed this repository's compile/test/lint/build gates.
 - P0-C CI run: `37631153808` — unit tests PASSED, Android lint PASSED, debug APK assembly PASSED, APK existence check PASSED, artifact upload PASSED.
 - P0-C artifact ID: `11485929885`, name `ai-video-translator-debug-apk`.
@@ -53,7 +54,7 @@ Build a personal Android video translator using direct AI provider APIs. NVIDIA 
 ## External / provider constraints
 - NVIDIA hosted access is treated as zero monetary API cost for this personal prototype, but the client must still handle provider/network failure and throttling such as HTTP 429 later.
 - The P0-C Parakeet CTC model is deliberately an English-only prototype choice. Multilingual/Arabic-source STT remains a separate provider/model decision after this transport/timestamp gate is proven.
-- Current P0-C goal is not production STT architecture; it is to prove: Android audio decode -> valid WAV -> NVIDIA request -> transcript + usable timestamps on the target phone.
+- P0-C has now proved: Android audio decode -> valid WAV -> NVIDIA request -> transcript + usable word timestamps on the target phone.
 - No API key is committed to GitHub or embedded in the APK.
 
 ## Verification levels
@@ -61,16 +62,15 @@ Build a personal Android video translator using direct AI provider APIs. NVIDIA 
 - P0-B extraction: `DEVICE VERIFIED`.
 - P0-B playback correctness: `DEVICE UNVERIFIED`.
 - P0-C code: `IMPLEMENTED + CI TESTED + LINT PASSED + ARTIFACT VERIFIED`.
-- P0-C local WAV conversion on target phone: `DEVICE UNVERIFIED`.
-- P0-C live NVIDIA request/response: `PROVIDER UNVERIFIED`.
+- P0-C local WAV conversion on target phone: `DEVICE VERIFIED`.
+- P0-C live NVIDIA request/response: `PROVIDER + DEVICE VERIFIED`.
+- P0-C current response parser / word timestamp contract: `PROVIDER VERIFIED` for the tested Parakeet one-minute English path.
 
-## Next valid action
-1. Install the P0-C APK on the target Android phone.
-2. Select the same known-good English video.
-3. Enter the NVIDIA API key in the app (do not send or paste the key into chat).
-4. Tap `تشغيل اختبار NVIDIA STT`.
-5. Verify that WAV preparation succeeds and shows PCM 16-bit mono, a plausible sample rate, approximately 01:00 duration, and a plausible WAV size.
-6. Verify that NVIDIA returns a transcript; record displayed word count and first/last timestamp if present.
-7. Send a screenshot of the success state or the exact displayed error.
-8. Separately confirm whether the prior P0-B `تشغيل عينة الصوت` button actually played the expected first minute.
-9. Only after the live request succeeds should the NVIDIA response parser/timestamp contract be promoted to PROVIDER-VERIFIED and used to design the reusable STT provider adapter.
+## Next valid action — P0-D translation gate
+1. Keep STT and translation as separate stages; timestamps remain owned by STT.
+2. Convert the 217 timestamped words into stable subtitle-style source cues with IDs, start/end times, and English text.
+3. Send a small batch of those cues to NVIDIA's OpenAI-compatible LLM chat-completions endpoint for English -> Arabic translation.
+4. Require the translation response to return the same cue IDs/count and Arabic text only; translation must not alter timestamps.
+5. Validate IDs/count programmatically and fail safely on malformed model output.
+6. Display the Arabic translation beside the original cue timing on the phone.
+7. Once a live translation request succeeds on-device, promote P0-D and then generate/export the first SRT from the same cue model.
