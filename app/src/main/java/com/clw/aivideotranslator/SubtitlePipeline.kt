@@ -3,7 +3,8 @@ package com.clw.aivideotranslator
 import java.util.Locale
 
 // P0 boundary: integer milliseconds supplied by the existing STT adapter.
-// These offsets are relative to the WAV sample, not the full video presentation timeline.
+// SourceUnit offsets are relative to the extracted WAV sample. P0-E maps final cues
+// onto the selected video's presentation timeline before preview/export.
 data class SourceUnit(
     val id: String,
     val startMs: Long,
@@ -82,17 +83,53 @@ object SubtitlePipeline {
             require(unit.startMs >= previousEnd && unit.endMs > unit.startMs &&
                 unit.endMs <= SAMPLE_END_MS) { "توقيت الوحدة غير صالح" }
             previousEnd = unit.endMs
-            ArabicSubtitleCue(unit.id, unit.startMs, unit.endMs,
-                validateText(byId.getValue(unit.id).translatedText))
+            ArabicSubtitleCue(
+                unit.id,
+                unit.startMs,
+                unit.endMs,
+                validateText(byId.getValue(unit.id).translatedText),
+            )
         }
     }
 
-    fun srt(cues: List<ArabicSubtitleCue>): String {
+    /**
+     * Converts sample-relative cues to the selected video's presentation timeline.
+     * P0 currently extracts the first minute, so sampleStartMs is 0 in the UI, but the
+     * explicit mapping is kept here so later non-zero samples cannot silently export
+     * incorrect SRT clocks.
+     */
+    fun toPresentationTimeline(
+        sampleCues: List<ArabicSubtitleCue>,
+        sampleStartMs: Long,
+        videoDurationMs: Long,
+    ): List<ArabicSubtitleCue> {
+        require(sampleCues.isNotEmpty()) { "لا توجد ترجمة لربطها بالفيديو" }
+        require(sampleStartMs >= 0) { "بداية العينة سالبة" }
+        require(videoDurationMs > sampleStartMs) { "مدة الفيديو لا تسمح بهذه العينة" }
+        var previousEnd = sampleStartMs
+        return sampleCues.map { cue ->
+            require(cue.startMs >= 0 && cue.endMs > cue.startMs && cue.endMs <= SAMPLE_END_MS) {
+                "توقيت العينة غير صالح"
+            }
+            val start = Math.addExact(sampleStartMs, cue.startMs)
+            val end = Math.addExact(sampleStartMs, cue.endMs)
+            require(start >= previousEnd && end <= videoDurationMs) {
+                "توقيت الترجمة يتجاوز خط الفيديو أو غير رتيب"
+            }
+            previousEnd = end
+            cue.copy(startMs = start, endMs = end)
+        }
+    }
+
+    fun activeCue(cues: List<ArabicSubtitleCue>, positionMs: Long): ArabicSubtitleCue? =
+        cues.firstOrNull { positionMs >= it.startMs && positionMs < it.endMs }
+
+    fun srt(cues: List<ArabicSubtitleCue>, maxTimelineMs: Long? = null): String {
         require(cues.isNotEmpty()) { "لا توجد ترجمة للتصدير" }
         var previousEnd = 0L
         return cues.mapIndexed { index, cue ->
             require(cue.startMs >= previousEnd && cue.endMs > cue.startMs &&
-                cue.endMs <= SAMPLE_END_MS) { "توقيت SRT غير صالح" }
+                (maxTimelineMs == null || cue.endMs <= maxTimelineMs)) { "توقيت SRT غير صالح" }
             previousEnd = cue.endMs
             "${index + 1}\n${timestamp(cue.startMs)} --> ${timestamp(cue.endMs)}\n${validateText(cue.text)}\n\n"
         }.joinToString("")
@@ -100,7 +137,13 @@ object SubtitlePipeline {
 
     fun timestamp(ms: Long): String {
         require(ms >= 0)
-        return String.format(Locale.ROOT, "%02d:%02d:%02d,%03d",
-            ms / 3_600_000, (ms / 60_000) % 60, (ms / 1_000) % 60, ms % 1_000)
+        return String.format(
+            Locale.ROOT,
+            "%02d:%02d:%02d,%03d",
+            ms / 3_600_000,
+            (ms / 60_000) % 60,
+            (ms / 1_000) % 60,
+            ms % 1_000,
+        )
     }
 }
