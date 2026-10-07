@@ -2,6 +2,7 @@ package com.clw.aivideotranslator
 
 import android.content.ClipData
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,7 +35,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
-internal fun TranslationCard(result: NvidiaSttResult, apiKey: String) {
+internal fun TranslationCard(
+    result: NvidiaSttResult,
+    apiKey: String,
+    sourceUri: Uri,
+    videoDurationMs: Long,
+    sampleStartMs: Long = 0L,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
@@ -45,6 +52,7 @@ internal fun TranslationCard(result: NvidiaSttResult, apiKey: String) {
     var srt by remember { mutableStateOf<String?>(null) }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
+
     val save = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/x-subrip")
     ) { uri ->
@@ -61,16 +69,20 @@ internal fun TranslationCard(result: NvidiaSttResult, apiKey: String) {
                     }
                 }
                 exporting = false
-                Toast.makeText(context, if (saved.isSuccess) "تم حفظ sample_ar.srt" else
-                    "تعذر حفظ SRT؛ أعد المحاولة", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    context,
+                    if (saved.isSuccess) "تم حفظ sample_ar_video_timeline.srt" else
+                        "تعذر حفظ SRT؛ أعد المحاولة",
+                    Toast.LENGTH_LONG,
+                ).show()
             }
         }
     }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("الترجمة العربية — أول 60 ثانية · HF2")
-            Text("الإصدار 0.1.1-p0d-hf2")
+            Text("الترجمة العربية — P0-E معاينة التزامن")
+            Text("الإصدار 0.1.3-p0e-preview")
             Text(NvidiaTranslationClient.MODEL_ID)
             Text(status)
             Button(
@@ -92,12 +104,17 @@ internal fun TranslationCard(result: NvidiaSttResult, apiKey: String) {
                                 translated += TranslationEntry(unit.id, text)
                                 if (index < source.lastIndex) delay(1_500)
                             }
-                            val complete = SubtitlePipeline.cues(source, translated)
-                            val text = SubtitlePipeline.srt(complete)
+                            val sampleCues = SubtitlePipeline.cues(source, translated)
+                            val presentationCues = SubtitlePipeline.toPresentationTimeline(
+                                sampleCues = sampleCues,
+                                sampleStartMs = sampleStartMs,
+                                videoDurationMs = videoDurationMs,
+                            )
+                            val text = SubtitlePipeline.srt(presentationCues, videoDurationMs)
                             // Publish only a completely validated translation snapshot.
-                            cues = complete
+                            cues = presentationCues
                             srt = text
-                            status = "✓ اكتملت الترجمة وإنشاء sample_ar.srt؛ التوقيت مطابق للمصدر."
+                            status = "✓ اكتملت الترجمة وربط التوقيت بخط الفيديو وإنشاء SRT."
                         } catch (e: CancellationException) {
                             status = "أُلغيت الترجمة؛ لم يتم إنشاء SRT."
                             throw e
@@ -109,16 +126,26 @@ internal fun TranslationCard(result: NvidiaSttResult, apiKey: String) {
                     }
                 },
             ) { Text("ترجمة العينة إلى العربية") }
+
             if (busy) {
                 Button(onClick = { job?.cancel() }) { Text("إلغاء الترجمة") }
             }
+
             val completedSrt = srt
             if (completedSrt != null) {
-                Text("الأزمنة نسبةً إلى بداية عينة WAV، وليست إزاحة للفيديو الكامل.")
+                Text("✓ أزمنة SRT أصبحت على خط الفيديو الأصلي. بداية العينة الحالية = ${SubtitlePipeline.timestamp(sampleStartMs)}")
+                VideoSubtitlePreview(
+                    sourceUri = sourceUri,
+                    cues = cues,
+                    sampleStartMs = sampleStartMs,
+                    sampleEndMs = minOf(videoDurationMs, sampleStartMs + SubtitlePipeline.SAMPLE_END_MS),
+                )
+
                 Button(enabled = !exporting && pendingExport == null, onClick = {
                     pendingExport = completedSrt
-                    save.launch("sample_ar.srt")
-                }) { Text("حفظ sample_ar.srt") }
+                    save.launch("sample_ar_video_timeline.srt")
+                }) { Text("حفظ SRT بخط الفيديو") }
+
                 Button(enabled = !exporting, onClick = {
                     scope.launch {
                         exporting = true
@@ -127,34 +154,45 @@ internal fun TranslationCard(result: NvidiaSttResult, apiKey: String) {
                                 val directory = File(context.cacheDir, "p0_subtitles").apply { mkdirs() }
                                 // Keep each shared snapshot separate so a later translation cannot overwrite it.
                                 val snapshot = File(directory, java.util.UUID.randomUUID().toString()).apply { mkdirs() }
-                                File(snapshot, "sample_ar.srt").apply { writeText(completedSrt, Charsets.UTF_8) }
+                                File(snapshot, "sample_ar_video_timeline.srt").apply {
+                                    writeText(completedSrt, Charsets.UTF_8)
+                                }
                             }
-                            val uri = FileProvider.getUriForFile(context,
-                                "${context.packageName}.subtitles", file)
+                            val uri = FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.subtitles",
+                                file,
+                            )
                             val intent = Intent(Intent.ACTION_SEND).apply {
                                 type = "application/x-subrip"
                                 putExtra(Intent.EXTRA_STREAM, uri)
-                                clipData = ClipData.newRawUri("sample_ar.srt", uri)
+                                clipData = ClipData.newRawUri("sample_ar_video_timeline.srt", uri)
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             }
                             context.startActivity(Intent.createChooser(intent, "مشاركة SRT"))
                         }
                         exporting = false
-                        if (shared.isFailure) Toast.makeText(context, "تعذر مشاركة SRT",
-                            Toast.LENGTH_LONG).show()
+                        if (shared.isFailure) {
+                            Toast.makeText(context, "تعذر مشاركة SRT", Toast.LENGTH_LONG).show()
+                        }
                     }
-                }) { Text("مشاركة sample_ar.srt") }
+                }) { Text("مشاركة SRT بخط الفيديو") }
+
                 units.zip(cues).forEach { (unit, cue) ->
                     SelectionContainer {
                         Column {
-                            Text("${unit.id}: ${SubtitlePipeline.timestamp(unit.startMs)} → ${SubtitlePipeline.timestamp(unit.endMs)}",
-                                style = TextStyle(textDirection = TextDirection.Ltr))
+                            Text(
+                                "${unit.id}: ${SubtitlePipeline.timestamp(cue.startMs)} → ${SubtitlePipeline.timestamp(cue.endMs)}",
+                                style = TextStyle(textDirection = TextDirection.Ltr),
+                            )
                             Text(unit.sourceText, style = TextStyle(textDirection = TextDirection.Ltr))
                             Text(cue.text, style = TextStyle(textDirection = TextDirection.ContentOrRtl))
                         }
                     }
                 }
-                SelectionContainer { Text(completedSrt, style = TextStyle(textDirection = TextDirection.Ltr)) }
+                SelectionContainer {
+                    Text(completedSrt, style = TextStyle(textDirection = TextDirection.Ltr))
+                }
             }
         }
     }
