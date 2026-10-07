@@ -24,9 +24,11 @@ class NvidiaTranslationClientTest {
         content: Any,
         finish: Any? = "stop",
         includeRole: Boolean = true,
+        toolCalls: Any? = null,
     ): String {
         val message = JSONObject().put("content", content)
         if (includeRole) message.put("role", "assistant")
+        if (toolCalls != null) message.put("tool_calls", toolCalls)
         val choice = JSONObject().put("message", message)
         if (finish != null) choice.put("finish_reason", finish)
         return JSONObject().put("choices", JSONArray().put(choice)).toString()
@@ -40,6 +42,15 @@ class NvidiaTranslationClientTest {
         assertEquals(
             "مرحبًا بالعالم.",
             NvidiaTranslationClient.parseResponse(response("مرحبًا بالعالم.", finish = null, includeRole = false)),
+        )
+    }
+
+    @Test fun acceptsEmptyToolCallsMetadata() {
+        assertEquals(
+            "مرحبًا بالعالم.",
+            NvidiaTranslationClient.parseResponse(
+                response("مرحبًا بالعالم.", toolCalls = JSONArray())
+            ),
         )
     }
 
@@ -69,12 +80,22 @@ class NvidiaTranslationClientTest {
         }
     }
 
-    @Test fun rejectsUnexpectedRoleAndCompletionReason() {
+    @Test fun rejectsActualToolCallsUnexpectedRoleAndCompletionReason() {
         val wrongRole = JSONObject().put("choices", JSONArray().put(JSONObject()
             .put("finish_reason", "stop")
             .put("message", JSONObject().put("role", "tool").put("content", "مرحبًا"))))
             .toString()
-        listOf(wrongRole, response("مرحبًا", "tool_calls"), response("مرحبًا", "content_filter")).forEach {
+        val actualToolCall = JSONArray().put(
+            JSONObject()
+                .put("type", "function")
+                .put("function", JSONObject().put("name", "translate").put("arguments", "{}"))
+        )
+        listOf(
+            wrongRole,
+            response("مرحبًا", toolCalls = actualToolCall),
+            response("مرحبًا", "tool_calls"),
+            response("مرحبًا", "content_filter"),
+        ).forEach {
             try {
                 NvidiaTranslationClient.parseResponse(it)
                 fail("Must reject unsafe/incomplete envelope")
