@@ -1,0 +1,26 @@
+{
+  "fixtureType": "synthetic-x001-clock-evidence-v1",
+  "historicalSource": false,
+  "cases": [
+    {
+      "id": "ambiguous-20-80",
+      "rawStart": 20.0,
+      "rawEnd": 80.0,
+      "declaredUnit": null,
+      "purpose": "Same numeric offsets are valid under second and millisecond interpretations; magnitude is not evidence of unit."
+    },
+    {
+      "id": "nonzero-origin-ms",
+      "rawStart": 80.0,
+      "rawEnd": 200.0,
+      "declaredUnit": "ms",
+      "presentationOriginUs": 500000,
+      "expectedPresentationStartUs": 580000,
+      "expectedPresentationEndUs": 700000
+    }
+  ],
+  "n24": {
+    "minimumToleranceUs": 40000,
+    "containerDurationToleranceUs": 250000
+  }
+}
