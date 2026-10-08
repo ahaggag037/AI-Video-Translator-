@@ -1,8 +1,7 @@
 package com.clw.aivideotranslator.session
 
 import com.clw.aivideotranslator.DetailedSttAudioPreparation
-import com.clw.aivideotranslator.NvidiaSttDetailedParse
-import com.clw.aivideotranslator.NvidiaSttRequestProfile
+import com.clw.aivideotranslator.NvidiaSttTransportObservation
 import com.clw.aivideotranslator.NvidiaSttWireContract
 import com.clw.aivideotranslator.SttInputAudioTrack
 import com.clw.aivideotranslator.semantic.ClockVerificationStatus
@@ -16,18 +15,22 @@ import java.security.MessageDigest
  * Pure fail-closed adapter from already-observed source/audio/STT evidence into durable semantic truth.
  * This does not perform I/O against the source URI, submit a provider request, choose a track/range,
  * or authorize timing. Legacy normalized word offsets are deliberately discarded while X001 is open.
- * The request profile is explicit evidence supplied by the caller; this factory never invents it.
+ * STT provenance is consumed as ONE transport-bound observation (profile + accepted parse + raw
+ * response SHA-256 + transported-sample digest bound at the response-handling point); the factory
+ * never accepts independently supplied provenance parts and re-verifies the transported sample
+ * digest against its own independent inspection of the prepared WAV bytes.
  */
 internal object NvidiaSourceSnapshotFactory {
     fun buildUnverified(
         attachment: SourceAttachment,
         preparation: DetailedSttAudioPreparation,
-        parsed: NvidiaSttDetailedParse,
-        requestProfile: NvidiaSttRequestProfile,
+        observation: NvidiaSttTransportObservation,
     ): SourceSnapshot {
+        val requestProfile = observation.requestProfile
         require(requestProfile == NvidiaSttWireContract.PROFILE) {
             "unsupported STT request profile for current snapshot adapter"
         }
+        val parsed = observation.parsed
         require(parsed.parserVersion.isNotBlank()) { "missing accepted STT parser identity" }
         requireTrackOwnership(attachment.audioTrack, preparation.provenance.inputTrack)
 
@@ -47,6 +50,9 @@ internal object NvidiaSourceSnapshotFactory {
             channelCount = profile.channelCount,
             bitsPerSample = profile.bitsPerSample,
         )
+        require(observation.sampleSha256 == pcmSample.wavSha256) {
+            "transported STT sample does not match inspected WAV bytes"
+        }
         val expectedEndUs = Math.addExact(profile.sourceStartUs, pcmSample.derivedPcmDurationUs)
         require(profile.sourceEndUs == expectedEndUs) { "prepared sample end does not match PCM duration" }
         val expectedDurationMs = Math.multiplyExact(pcmSample.pcmFrameCount, 1_000L) / pcmSample.sampleRateHz
