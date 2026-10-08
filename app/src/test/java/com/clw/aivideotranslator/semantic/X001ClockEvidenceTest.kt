@@ -3,7 +3,6 @@ package com.clw.aivideotranslator.semantic
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,6 +38,18 @@ class X001ClockEvidenceTest {
         )
         assertEquals(item.getLong("expectedPresentationStartUs"), mapped.start.value)
         assertEquals(item.getLong("expectedPresentationEndUs"), mapped.end.value)
+    }
+
+    @Test fun declaredSecondsReferenceMapsExactlyWithoutEstablishingProviderUnits() {
+        val item = fixture().getJSONArray("cases").getJSONObject(2)
+        assertEquals("declared-seconds-reference", item.getString("id"))
+        assertEquals("s", item.getString("declaredUnit"))
+
+        val interval = rawIntervalToUs(item.getDouble("rawStart"), item.getDouble("rawEnd"), RawUnit.SECONDS)
+
+        assertEquals(item.getLong("expectedAudioStartUs"), interval.start.value)
+        assertEquals(item.getLong("expectedAudioEndUs"), interval.end.value)
+        assertTrue(item.getString("purpose").contains("does not establish NVIDIA provider units"))
     }
 
     @Test fun n24ToleranceUsesLargerOfLocalFrameDurationAndFortyMilliseconds() {

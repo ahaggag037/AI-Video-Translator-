@@ -17,6 +17,15 @@
       "presentationOriginUs": 500000,
       "expectedPresentationStartUs": 580000,
       "expectedPresentationEndUs": 700000
+    },
+    {
+      "id": "declared-seconds-reference",
+      "rawStart": 0.08,
+      "rawEnd": 0.2,
+      "declaredUnit": "s",
+      "expectedAudioStartUs": 80000,
+      "expectedAudioEndUs": 200000,
+      "purpose": "Synthetic declared-seconds control; this does not establish NVIDIA provider units."
     }
   ],
   "n24": {
