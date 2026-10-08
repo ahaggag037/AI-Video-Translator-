@@ -1,5 +1,6 @@
 package com.clw.aivideotranslator.session
 
+import android.content.ContentResolver
 import android.content.Context
 import com.clw.aivideotranslator.DetailedSttAudioPreparation
 import com.clw.aivideotranslator.NvidiaSttTransportObservation
@@ -73,5 +74,34 @@ internal object SourceSessionCoordinator {
             readRevision = { store.readManifest(sessionId).revision },
             action = { expected -> store.bindInitialSourceSnapshot(sessionId, expected, snapshot) },
         )
+    }
+
+    /**
+     * Blocking reopen/resume decision surface. Call from an I/O dispatcher.
+     *
+     * Fencing discipline: the probe token is minted from the manifest read BEFORE the blocking
+     * byte-stream probe, and the observation is evaluated against the manifest RE-READ AFTER the
+     * probe — a concurrent binding/advance during I/O makes the token stale and the evaluator
+     * answers STALE_OBSERVATION rather than trusting a pre-I/O world. The evaluator's own
+     * UNBOUND / LEGACY_UNBOUND / CORRUPT_BINDING / CHECK_REQUIRED branches are preserved; this
+     * function adds no new policy, only composition. AVAILABLE remains a point-in-time statement,
+     * never an authorization to skip operation-time fencing.
+     */
+    fun assessSourceResume(
+        resolver: ContentResolver,
+        store: TranslationSessionStore,
+        sessionId: String,
+    ): Result<SourceResumeAssessment> = runCatching {
+        val manifestBefore = store.readManifest(sessionId)
+        val attachment = store.readActiveSourceAttachment(sessionId)
+        if (attachment == null) {
+            // No immutable attachment object: UNBOUND / LEGACY_UNBOUND / CORRUPT_BINDING is the
+            // evaluator's call from the current manifest state alone.
+            return@runCatching SourceResumeEvaluator.evaluate(manifestBefore, null, null)
+        }
+        val token = SourceProbeToken.from(manifestBefore)
+        val observation = SourceContentProbe.probe(resolver, token, attachment)
+        val manifestAfter = store.readManifest(sessionId)
+        SourceResumeEvaluator.evaluate(manifestAfter, attachment, observation)
     }
 }
