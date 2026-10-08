@@ -15,14 +15,16 @@ class DurableTranslationAttemptExecutor private constructor(
         persistReceived = store::writeReceipt,
     )
 
-    internal constructor(
-        persistReceipt: (RequestReceipt) -> RequestReceipt,
-        persistSentIfCurrent: (RequestReceipt) -> RequestReceipt = persistReceipt,
-    ) : this(
-        persistPrepared = persistReceipt,
-        persistSentIfCurrent = persistSentIfCurrent,
-        persistReceived = persistReceipt,
-    )
+    internal companion object {
+        fun forTesting(
+            persistReceipt: (RequestReceipt) -> RequestReceipt,
+            persistSentIfCurrent: (RequestReceipt) -> RequestReceipt = persistReceipt,
+        ): DurableTranslationAttemptExecutor = DurableTranslationAttemptExecutor(
+            persistPrepared = persistReceipt,
+            persistSentIfCurrent = persistSentIfCurrent,
+            persistReceived = persistReceipt,
+        )
+    }
 
     suspend fun execute(
         prepared: RequestReceipt,

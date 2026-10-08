@@ -51,7 +51,7 @@ class DurableTranslationAttemptExecutorTest {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
         var submitCount = 0
-        val executor = DurableTranslationAttemptExecutor { receipt ->
+        val executor = DurableTranslationAttemptExecutor.forTesting { receipt: RequestReceipt ->
             persisted += receipt.phase
             receipt
         }
@@ -73,7 +73,7 @@ class DurableTranslationAttemptExecutorTest {
     @Test fun sentPersistenceFailurePreventsTransportInvocation() = runBlocking {
         val (plan, prepared) = prepared()
         var submitCalled = false
-        val executor = DurableTranslationAttemptExecutor { receipt ->
+        val executor = DurableTranslationAttemptExecutor.forTesting { receipt: RequestReceipt ->
             if (receipt.phase == RequestReceiptPhase.SENT) error("disk failure")
             receipt
         }
@@ -94,7 +94,7 @@ class DurableTranslationAttemptExecutorTest {
     @Test fun transportFailureLeavesLastDurablePhaseSent() = runBlocking {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
-        val executor = DurableTranslationAttemptExecutor { receipt ->
+        val executor = DurableTranslationAttemptExecutor.forTesting { receipt: RequestReceipt ->
             persisted += receipt.phase
             receipt
         }
