@@ -51,6 +51,43 @@ class FrameGeometryResolverTest {
         assertEquals(1920, frame.uprightHeightPx)
     }
 
+    @Test fun continuousPreviewTransformMapsVideoCornersCenterAndRoundTripsWithoutRoundingPolicy() {
+        val frame = FrameGeometryResolver.canonical(1920, 1080, 0)
+        val preview = FrameGeometryResolver.fitCenter(frame, 1000, 1000)
+        val transform = FrameGeometryResolver.transform(frame, preview)
+
+        assertEquals(PreviewPointPx(0.0, 219.0), transform.videoToPreview(VideoPointPx(0.0, 0.0)))
+        assertEquals(PreviewPointPx(1000.0, 781.0), transform.videoToPreview(VideoPointPx(1920.0, 1080.0)))
+        assertEquals(PreviewPointPx(500.0, 500.0), transform.videoToPreview(VideoPointPx(960.0, 540.0)))
+
+        val source = VideoPointPx(321.25, 777.75)
+        val roundTrip = transform.previewToVideo(transform.videoToPreview(source))
+        assertEquals(source.x, roundTrip.x, 1e-9)
+        assertEquals(source.y, roundTrip.y, 1e-9)
+    }
+
+    @Test fun previewBarsCannotBeMappedBackIntoCanonicalVideoTruth() {
+        val frame = FrameGeometryResolver.canonical(1920, 1080, 0)
+        val preview = FrameGeometryResolver.fitCenter(frame, 1000, 1000)
+        val transform = FrameGeometryResolver.transform(frame, preview)
+        fun rejected(point: PreviewPointPx) {
+            var failed = false
+            try { transform.previewToVideo(point) } catch (_: IllegalArgumentException) { failed = true }
+            assertTrue("preview UI bars must be outside transform domain", failed)
+        }
+        rejected(PreviewPointPx(500.0, 100.0))
+        rejected(PreviewPointPx(500.0, 900.0))
+    }
+
+    @Test fun rotationIsResolvedBeforePreviewTransformAndNeverAppliedTwice() {
+        val frame = FrameGeometryResolver.canonical(1920, 1080, 90)
+        val preview = FrameGeometryResolver.fitCenter(frame, 540, 960)
+        val transform = FrameGeometryResolver.transform(frame, preview)
+        assertEquals(PreviewContentRect(0, 0, 540, 960), preview.contentRect)
+        assertEquals(PreviewPointPx(540.0, 960.0),
+            transform.videoToPreview(VideoPointPx(frame.uprightWidthPx.toDouble(), frame.uprightHeightPx.toDouble())))
+    }
+
     @Test fun invalidRotationAndNonpositiveGeometryFailClosed() {
         fun rejected(block: () -> Unit) {
             var failed = false
@@ -61,6 +98,10 @@ class FrameGeometryResolverTest {
         rejected { FrameGeometryResolver.canonical(0, 1080, 0) }
         val frame = FrameGeometryResolver.canonical(1920, 1080, 0)
         rejected { FrameGeometryResolver.fitCenter(frame, 0, 1000) }
+        val preview = FrameGeometryResolver.fitCenter(frame, 1000, 1000)
+        val transform = FrameGeometryResolver.transform(frame, preview)
+        rejected { transform.videoToPreview(VideoPointPx(-0.01, 0.0)) }
+        rejected { transform.videoToPreview(VideoPointPx(1920.01, 0.0)) }
     }
 
     @Test fun largeLegalIntDimensionsDoNotOverflowAspectComparison() {

@@ -43,6 +43,46 @@ data class PreviewFitCenterGeometry(
     }
 }
 
+data class VideoPointPx(val x: Double, val y: Double) {
+    init { require(x.isFinite() && y.isFinite()) { "video point must be finite" } }
+}
+
+data class PreviewPointPx(val x: Double, val y: Double) {
+    init { require(x.isFinite() && y.isFinite()) { "preview point must be finite" } }
+}
+
+/**
+ * Continuous transform between the upright VIDEO coordinate space and the fit-center preview rect.
+ * It deliberately performs no integer/pixel rounding; actual VideoView/device raster rounding remains
+ * an X004 measurement. UI bars are outside the transform domain and cannot map back to video truth.
+ */
+data class VideoPreviewTransform(
+    val frame: CanonicalVideoFrame,
+    val preview: PreviewFitCenterGeometry,
+) {
+    fun videoToPreview(point: VideoPointPx): PreviewPointPx {
+        require(point.x in 0.0..frame.uprightWidthPx.toDouble() &&
+            point.y in 0.0..frame.uprightHeightPx.toDouble()) { "video point outside upright frame" }
+        val rect = preview.contentRect
+        return PreviewPointPx(
+            x = rect.leftPx + point.x * rect.widthPx / frame.uprightWidthPx,
+            y = rect.topPx + point.y * rect.heightPx / frame.uprightHeightPx,
+        )
+    }
+
+    fun previewToVideo(point: PreviewPointPx): VideoPointPx {
+        val rect = preview.contentRect
+        require(point.x in rect.leftPx.toDouble()..rect.rightPx.toDouble() &&
+            point.y in rect.topPx.toDouble()..rect.bottomPx.toDouble()) {
+            "preview point is outside video content rect"
+        }
+        return VideoPointPx(
+            x = (point.x - rect.leftPx) * frame.uprightWidthPx / rect.widthPx,
+            y = (point.y - rect.topPx) * frame.uprightHeightPx / rect.heightPx,
+        )
+    }
+}
+
 /**
  * Shadow-only X004 geometry model.
  *
@@ -105,4 +145,7 @@ object FrameGeometryResolver {
             ),
         )
     }
+
+    fun transform(frame: CanonicalVideoFrame, preview: PreviewFitCenterGeometry): VideoPreviewTransform =
+        VideoPreviewTransform(frame, preview)
 }
