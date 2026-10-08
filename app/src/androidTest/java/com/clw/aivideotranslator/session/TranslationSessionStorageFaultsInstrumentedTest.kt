@@ -94,6 +94,72 @@ class TranslationSessionStorageFaultsInstrumentedTest {
         }
     }
 
+    @Test fun corruptManifestFailsClosedBeforeSessionMutation() {
+        val root = root("corrupt-manifest")
+        try {
+            val store = TranslationSessionStore(root)
+            store.createSession("session-1")
+            File(root, "session-1/manifest.json").writeText("{not-json", Charsets.UTF_8)
+
+            var readFailedClosed = false
+            try {
+                store.readManifest("session-1")
+            } catch (_: Throwable) {
+                readFailedClosed = true
+            }
+            assertTrue(readFailedClosed)
+
+            var mutationFailedClosed = false
+            try {
+                store.bumpEpoch("session-1", expectedRevision = 0)
+            } catch (_: Throwable) {
+                mutationFailedClosed = true
+            }
+            assertTrue(mutationFailedClosed)
+            assertTrue(File(root, "session-1/entries").listFiles().isNullOrEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun corruptActiveEntryFailsClosedWithoutManifestRewrite() {
+        val root = root("corrupt-entry")
+        try {
+            val store = TranslationSessionStore(root)
+            store.createSession("session-1")
+            val machine = MachineTranslationRevision("machine-1", "ترجمة آلية", "sig-1")
+            val entry = StoredTranslationEntry(
+                revisionId = "entry-1",
+                record = TranslationRecord(
+                    unitId = "u1",
+                    machineRevisions = listOf(machine),
+                    activeMachineRevisionId = machine.id,
+                    manualRevision = null,
+                    reviewState = TranslationReviewState.MACHINE_CANDIDATE,
+                ),
+            )
+            val committed = store.commitEntry("session-1", expectedRevision = 0, entry = entry)
+            assertEquals(1L, committed.revision)
+            assertEquals("entry-1", committed.activeEntryRefs["u1"])
+
+            File(root, "session-1/entries/u1/entry-1.json").writeText("{not-json", Charsets.UTF_8)
+
+            var failedClosed = false
+            try {
+                store.readActiveEntry("session-1", "u1")
+            } catch (_: Throwable) {
+                failedClosed = true
+            }
+            assertTrue(failedClosed)
+
+            val manifestAfterFailure = store.readManifest("session-1")
+            assertEquals(1L, manifestAfterFailure.revision)
+            assertEquals("entry-1", manifestAfterFailure.activeEntryRefs["u1"])
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun schemaV1RestoreAfterRestartPreservesManualAndMachineHistory() {
         val root = root("schema-restore")
         try {
