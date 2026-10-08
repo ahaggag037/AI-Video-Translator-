@@ -1,6 +1,6 @@
 {
   "schema": "clw-reservations/v0",
-  "version": 2,
+  "version": 3,
   "integration_branch": "build/p0g-translation-subtitle-v1",
   "protected_prefixes": [
     ".clw/",
@@ -40,35 +40,6 @@
         "tv1-legacy-bridge",
         "tv1-session-manifest",
         "tv1-provider-outcomes"
-      ]
-    },
-    {
-      "reservation_id": "LIVE-TOM-B006",
-      "task_id": "B006-X003",
-      "branch": "agent/tom/b006-live",
-      "status": "RUNNING",
-      "risk": "R4",
-      "control_change": true,
-      "write_set": [
-        ".clw/reservations.json",
-        "app/src/main/java/com/clw/aivideotranslator/subtitle/**",
-        "app/src/main/java/com/clw/aivideotranslator/tv1/subtitle/**",
-        "app/src/main/res/font/**",
-        "app/src/test/java/com/clw/aivideotranslator/subtitle/**",
-        "app/src/test/java/com/clw/aivideotranslator/tv1/subtitle/**",
-        "docs/X003*"
-      ],
-      "read_base_set": [
-        "app/src/main/java/com/clw/aivideotranslator/SubtitlePipeline.kt",
-        "app/src/main/java/com/clw/aivideotranslator/BurnedSubtitleExporter.kt",
-        "app/src/main/java/com/clw/aivideotranslator/VideoSubtitlePreview.kt",
-        "app/src/main/java/com/clw/aivideotranslator/TranslationCard.kt"
-      ],
-      "contract_set": [
-        "tv1-arabic-text-policy",
-        "tv1-layout-outcomes",
-        "tv1-render-geometry",
-        "x003-font-layout-harness"
       ]
     }
   ]
