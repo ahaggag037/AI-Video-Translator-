@@ -1,5 +1,6 @@
 package com.clw.aivideotranslator.subtitle.android
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Typeface
 import com.clw.aivideotranslator.R
@@ -36,9 +37,12 @@ class LoadedSubtitleFont private constructor(
     fun supports(text: String): Boolean = BundledArabicCoverage.supports(text)
 
     companion object {
+        @SuppressLint("ResourceType")
         internal fun load(context: Context): LoadedSubtitleFont {
             val resource = R.font.tv1_noto_sans_arabic_regular
             val digest = MessageDigest.getInstance("SHA-256")
+            // Fonts are file-backed resources. openRawResource reads the packaged bytes so the
+            // runtime integrity check covers the exact TTF that getFont() will load below.
             context.resources.openRawResource(resource).use { stream ->
                 val buffer = ByteArray(8_192)
                 while (true) {
