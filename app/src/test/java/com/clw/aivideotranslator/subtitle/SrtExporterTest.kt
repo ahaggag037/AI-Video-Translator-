@@ -33,6 +33,18 @@ class SrtExporterTest {
         assertTrue(srt.contains("00:00:00,500 --> 00:00:01,500"))
     }
 
+    @Test fun subMillisecondIntervalThatCollapsesInSrtPrecisionFailsClosed() {
+        try {
+            SrtExporter.export(
+                listOf(item(100, 900, "قصير")),
+                SrtClockPolicy.ORIGINAL_VIDEO,
+            )
+            fail("SRT must not emit equal timestamps after millisecond quantization")
+        } catch (error: IllegalArgumentException) {
+            assertEquals("SRT_TIMELINE_NOT_REPRESENTABLE", error.message)
+        }
+    }
+
     @Test fun visualLineBreaksAreNotCanonicalSrtOwnership() {
         val srt = SrtExporter.export(
             listOf(item(0, 1_000_000, "السطر الدلالي\nيبقى نصا واحدا")),
