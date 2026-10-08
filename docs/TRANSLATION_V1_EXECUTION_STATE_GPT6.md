@@ -3,55 +3,53 @@
 ## Identity
 - Frozen baseline: `build/p0f-hardburn-mp4` @ `861aadcb36cccee83d2c86e9a0c0a03b1efe6720`
 - Implementation branch: `build/p0g-gpt6-cleanroom-v1`
-- Last reconciled branch HEAD before B004 checkpoint: `5f9fbb34e9c0a444588becc0cda8d43d17be1e4f`
+- Last reconciled branch HEAD before this checkpoint: `700855d8f646fa1702162802f136f209ab374248`
 - Canonical design: `ASTRA_TRANSLATION_SYSTEM_MASTERPLAN_V4_1.md` — Translation & Subtitle System V1 V4.1 Final
 
 ## Current batch/task
-B004 — semantic segmenter/planner shadow path and X002 harness seed. Production semantic activation remains blocked by X002 evidence.
+B011 independent semantic timing/index/SRT primitives, while B003/B004 CI and experiment gates proceed.
 
 ## Completed
-- B001: frozen regression baseline and clean-room branch established.
-- B002: typed microsecond clocks, immutable semantic ownership models, lossless legacy bridge, minimal single-writer atomic session store foundations.
-- B003: orthogonal provider outcome classifier and bounded retry/recovery policy foundations added; unknown remote outcome is not auto-reposted.
-- B004 shadow: deterministic source segmentation foundation with exact word conservation, explicit presentation-word anchors, hard limits, punctuation/gap boundary scoring, and forced-fragment warnings.
-- B004 planner: `nvidia-text-v1` request identity is canonical length-prefixed UTF-8; request vs acceptance signatures are separate; protocol v1 refuses silent few-shot prompt changes.
-- X002 seed corpus/documentation added using synthetic fixtures only.
+- B001 baseline freeze and regression ledger.
+- B002 typed clocks, semantic ownership models, legacy bridge, and minimal atomic session-store foundations.
+- B003 orthogonal provider classification + bounded retry/recovery foundations.
+- B004 shadow semantic segmenter/planner and X002 seed harness; no production activation.
+- B011 pure primitives: display timing preserves speech intervals and only extends into explicit known gaps; binary half-open cue index; semantic-unwrapped UTF-8 SRT construction with ORIGINAL_VIDEO vs EXPORTED_RANGE clock policy.
 
 ## Partial / blocked
-- B003 production client integration remains pending CI confirmation; existing `NvidiaTranslationClient` request body is still the production path.
-- B004 is shadow-only. B005 activation is BLOCKED_BY_X002.
-- X001 real provider/device clock evidence unavailable; B007 clock activation remains BLOCKED_BY_X001.
-- Session receipt persistence/controller and manual edit workflow are not yet complete.
-- Arabic Android layout/font work (B006) remains independent and safe to start before X002 completes.
+- B003 production client integration awaits completed branch CI verification.
+- B004 production activation remains BLOCKED_BY_X002.
+- X001 clock mapping remains NOT_STARTED and B007 remains BLOCKED_BY_X001.
+- B011 manual-edit UI/controller wiring and recovery harness remain incomplete.
+- B006 Arabic/Unicode/layout foundation remains next independent safe slice.
 
 ## Experiments
 - X001: NOT_STARTED
-- X002: HARNESS_READY (seed corpus only; no live/human verdict)
+- X002: HARNESS_READY (seed only; no live/human verdict)
 - X003: NOT_STARTED
 - X004: NOT_STARTED
-- X005: HARNESS_READY (partial persistence/fencing foundations; no crash/device execution)
-- X006: NOT_STARTED
+- X005: HARNESS_READY (partial store/fencing foundations only; no crash/device run)
+- X006: HARNESS_READY (CueIndex random-seek contract only; no performance measurement)
 
 ## Latest meaningful test status
-- Frozen baseline Android CI run `37648228258`: historical PASS on exact baseline SHA.
-- B003 branch CI run `37723687884`: observed IN_PROGRESS while B004 foundations were built.
-- B004 tests are committed for CI but are not recorded PASS until Actions concludes.
+- Frozen baseline Android CI `37648228258`: historical PASS.
+- B003 run `37723687884`: Unit tests observed PASS; lint was running at last check.
+- B004 run `37723984637`: started; final result not yet recorded.
+- B011 tests are committed for CI; no PASS claim until Actions completes.
 
 ## Known deviations / repository facts
-- The execution-state file had been stale after early B002/B003 commits; it is now reconciled at this checkpoint.
-- STT still infers seconds-vs-ms from numeric magnitude; known defect remains gated by X001.
-- `SttAudioPreparer` records `sourceStartUs`; production origin wiring still requires X001 evidence.
+- Execution state was stale early in the campaign; it is now updated at coherent checkpoints.
+- STT still infers seconds-vs-ms by magnitude; no speculative fix before X001.
+- `SttAudioPreparer.sourceStartUs` is not yet an activated presentation mapping.
 - Repository has no Gradle wrapper; CI uses installed Gradle.
-- Shadow segmenter takes explicit presentation anchors rather than inventing a mapping from raw STT time.
+- Display timing uses known STT speech gaps conservatively; it does not label unknown audio as silence.
 
 ## Active architectural decisions
-- Semantic truth is separate from display/layout truth.
-- Core V1 timing uses typed `Long` microseconds.
-- Provider outcome dimensions remain orthogonal.
-- `nvidia-text-v1` remains text-only and one-unit-per-request until X002 says otherwise.
-- No previous-target translation chain is allowed.
-- Minimal single-writer persistence remains preferred; no Room/Hilt/backend/FFmpeg/toolchain upgrade.
-- Experiment-gated production behavior is not activated without evidence.
+- Semantic content, display timing, layout, and rendering remain separate ownership layers.
+- Core V1 timing is `Long` microseconds and half-open intervals.
+- SRT owns semantic unwrapped text and explicit clock policy, not bitmap line wrapping.
+- Unknown remote provider outcome is never blindly re-posted.
+- No experiment-gated production activation without evidence.
 
 ## RESUME HERE
-Inspect B003/B004 CI. If green, continue independent B006 Android text-policy/layout foundations and B011 semantic manual-edit/SRT primitives while X001/X002 remain gated.
+Inspect current CI. Fix any regression first. If green, build B006 TextPolicy/Android boundary/layout foundations in shadow mode; do not switch production renderer before X003/X004.
