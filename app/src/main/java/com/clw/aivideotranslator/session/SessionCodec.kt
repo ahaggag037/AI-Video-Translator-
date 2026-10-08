@@ -25,14 +25,24 @@ object SessionCodec {
         .put("activeEntryRefs", JSONObject().apply {
             manifest.activeEntryRefs.toSortedMap().forEach { (unitId, revisionId) -> put(unitId, revisionId) }
         })
+        .put("sourceBindingState", manifest.sourceBindingState.name)
+        .put("activeSourceAttachmentRef", manifest.activeSourceAttachmentRef ?: JSONObject.NULL)
+        .put("activeSourceSnapshotRef", manifest.activeSourceSnapshotRef ?: JSONObject.NULL)
         .toString()
 
+    /**
+     * Decodes manifest schema v2 and migrates legacy v1 manifests in memory. A v1 manifest had no
+     * durable source ownership, so migration is intentionally explicit LEGACY_UNBOUND rather than
+     * pretending that source-dependent work can be resumed safely.
+     */
     fun decodeManifest(json: String): SessionManifest {
         requireUtf8Size(json, MANIFEST_MAX_BYTES, "manifest")
         val root = JSONObject(json)
         require(root.has("schemaVersion")) { "manifest missing schemaVersion" }
-        val schema = root.getInt("schemaVersion")
-        require(schema == TRANSLATION_SESSION_SCHEMA_VERSION) { "unsupported session schema" }
+        val sourceSchema = root.getInt("schemaVersion")
+        require(sourceSchema == 1 || sourceSchema == TRANSLATION_MANIFEST_SCHEMA_VERSION) {
+            "unsupported manifest schema"
+        }
         val refsObject = root.optJSONObject("activeEntryRefs") ?: JSONObject()
         val refs = buildMap {
             val keys = refsObject.keys()
@@ -41,12 +51,28 @@ object SessionCodec {
                 put(key, refsObject.getString(key))
             }
         }
+        val sourceState: SourceBindingState
+        val attachmentRef: String?
+        val snapshotRef: String?
+        if (sourceSchema == 1) {
+            sourceState = SourceBindingState.LEGACY_UNBOUND
+            attachmentRef = null
+            snapshotRef = null
+        } else {
+            require(root.has("sourceBindingState")) { "manifest missing sourceBindingState" }
+            sourceState = SourceBindingState.valueOf(root.getString("sourceBindingState"))
+            attachmentRef = root.optionalString("activeSourceAttachmentRef")
+            snapshotRef = root.optionalString("activeSourceSnapshotRef")
+        }
         return SessionManifest(
-            schemaVersion = schema,
+            schemaVersion = TRANSLATION_MANIFEST_SCHEMA_VERSION,
             sessionId = root.getString("sessionId"),
             revision = root.getLong("revision"),
             epoch = root.getLong("epoch"),
             activeEntryRefs = refs,
+            sourceBindingState = sourceState,
+            activeSourceAttachmentRef = attachmentRef,
+            activeSourceSnapshotRef = snapshotRef,
         )
     }
 
@@ -80,7 +106,7 @@ object SessionCodec {
         requireUtf8Size(json, ENTRY_MAX_BYTES, "entry")
         val root = JSONObject(json)
         val schema = root.getInt("schemaVersion")
-        require(schema == TRANSLATION_SESSION_SCHEMA_VERSION) { "unsupported entry schema" }
+        require(schema == TRANSLATION_ENTRY_SCHEMA_VERSION) { "unsupported entry schema" }
         val machinesJson = root.getJSONArray("machineRevisions")
         val machines = (0 until machinesJson.length()).map { index ->
             val machine = machinesJson.getJSONObject(index)
@@ -144,7 +170,7 @@ object SessionCodec {
         requireUtf8Size(json, RECEIPT_MAX_BYTES, "receipt")
         val root = JSONObject(json)
         val schema = root.getInt("schemaVersion")
-        require(schema == TRANSLATION_SESSION_SCHEMA_VERSION) { "unsupported receipt schema" }
+        require(schema == TRANSLATION_RECEIPT_SCHEMA_VERSION) { "unsupported receipt schema" }
         val outcome = root.optJSONObject("outcome")?.let { value ->
             TranslationProviderOutcome(
                 transport = TransportOutcome.valueOf(value.getString("transport")),

@@ -14,16 +14,79 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SessionCodecTest {
-    @Test fun manifestRoundTripPreservesRevisionEpochAndSortedRefs() {
+    @Test fun manifestV2RoundTripPreservesRevisionEpochRefsAndSourceBinding() {
         val manifest = SessionManifest(
             sessionId = "session-1",
             revision = 7,
             epoch = 3,
             activeEntryRefs = linkedMapOf("u2" to "r2", "u1" to "r1"),
+            sourceBindingState = SourceBindingState.SNAPSHOT_BOUND,
+            activeSourceAttachmentRef = "source-1",
+            activeSourceSnapshotRef = "snapshot-1",
         )
         val json = SessionCodec.encodeManifest(manifest)
         assertEquals(manifest, SessionCodec.decodeManifest(json))
         assertTrue(json.indexOf("u1") < json.indexOf("u2"))
+        assertEquals(TRANSLATION_MANIFEST_SCHEMA_VERSION, JSONObject(json).getInt("schemaVersion"))
+    }
+
+    @Test fun legacyV1ManifestMigratesToExplicitLegacyUnboundV2() {
+        val legacy = JSONObject()
+            .put("schemaVersion", 1)
+            .put("sessionId", "legacy-session")
+            .put("revision", 4)
+            .put("epoch", 2)
+            .put("activeEntryRefs", JSONObject().put("u1", "r1"))
+            .toString()
+
+        val restored = SessionCodec.decodeManifest(legacy)
+
+        assertEquals(TRANSLATION_MANIFEST_SCHEMA_VERSION, restored.schemaVersion)
+        assertEquals(SourceBindingState.LEGACY_UNBOUND, restored.sourceBindingState)
+        assertNull(restored.activeSourceAttachmentRef)
+        assertNull(restored.activeSourceSnapshotRef)
+        assertEquals(mapOf("u1" to "r1"), restored.activeEntryRefs)
+        assertEquals(4L, restored.revision)
+        assertEquals(2L, restored.epoch)
+        val rewritten = JSONObject(SessionCodec.encodeManifest(restored))
+        assertEquals(TRANSLATION_MANIFEST_SCHEMA_VERSION, rewritten.getInt("schemaVersion"))
+        assertEquals(SourceBindingState.LEGACY_UNBOUND.name, rewritten.getString("sourceBindingState"))
+    }
+
+    @Test fun manifestSourceBindingRejectsImpossibleReferenceCombinations() {
+        try {
+            SessionManifest(
+                sessionId = "session-1",
+                revision = 0,
+                epoch = 0,
+                activeEntryRefs = emptyMap(),
+                sourceBindingState = SourceBindingState.UNBOUND,
+                activeSourceAttachmentRef = "source-1",
+            )
+            fail("Expected unbound source-reference rejection")
+        } catch (_: IllegalArgumentException) {
+            // expected
+        }
+        try {
+            SessionManifest(
+                sessionId = "session-1",
+                revision = 0,
+                epoch = 0,
+                activeEntryRefs = emptyMap(),
+                sourceBindingState = SourceBindingState.SNAPSHOT_BOUND,
+                activeSourceAttachmentRef = "source-1",
+                activeSourceSnapshotRef = null,
+            )
+            fail("Expected incomplete snapshot binding rejection")
+        } catch (_: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test fun manifestEvolutionDoesNotChangeEntryOrReceiptSchemaVersions() {
+        assertEquals(2, TRANSLATION_MANIFEST_SCHEMA_VERSION)
+        assertEquals(1, TRANSLATION_ENTRY_SCHEMA_VERSION)
+        assertEquals(1, TRANSLATION_RECEIPT_SCHEMA_VERSION)
     }
 
     @Test fun entryRoundTripPreservesManualAndMachineHistory() {
@@ -41,6 +104,7 @@ class SessionCodecTest {
         )
         val restored = SessionCodec.decodeEntry(SessionCodec.encodeEntry(entry))
         assertEquals(entry, restored)
+        assertEquals(TRANSLATION_ENTRY_SCHEMA_VERSION, restored.schemaVersion)
         assertEquals("تصحيح يدوي", restored.record.effectiveText())
         assertEquals("ترجمة آلية", restored.record.machineRevisions.single().text)
     }
@@ -71,6 +135,7 @@ class SessionCodecTest {
         val encoded = SessionCodec.encodeReceipt(receipt)
         val restored = SessionCodec.decodeReceipt(encoded)
         assertEquals(receipt, restored)
+        assertEquals(TRANSLATION_RECEIPT_SCHEMA_VERSION, restored.schemaVersion)
         assertEquals(9L, restored.adoptionFence().expectedManifestRevision)
         assertEquals("entry-3", restored.adoptionFence().expectedActiveEntryRevisionId)
         listOf("apiKey", "Authorization", "Bearer", "credential").forEach { secretField ->
@@ -101,7 +166,7 @@ class SessionCodecTest {
         )
     }
 
-    @Test fun unknownSchemaFailsClosed() {
+    @Test fun unknownManifestSchemaFailsClosed() {
         val json = JSONObject()
             .put("schemaVersion", 99)
             .put("sessionId", "session-1")
