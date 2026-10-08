@@ -60,8 +60,9 @@ object NvidiaSttClient {
      * verbatim response body never enters the observation graph. Non-2xx handling is byte-identical
      * in classification/message to the legacy path and never produces an observation. Legacy
      * transcribeEnglishSample semantics/request/failure behavior are unchanged.
+     * Module-internal: the durable evidence plumbing intentionally never crosses the module boundary.
      */
-    fun transcribeEnglishSampleDetailed(
+    internal fun transcribeEnglishSampleDetailed(
         apiKey: String,
         wavFile: File,
     ): Result<NvidiaSttTransportObservation> = runCatching {
