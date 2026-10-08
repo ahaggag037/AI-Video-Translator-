@@ -39,7 +39,6 @@ internal object SourceSnapshotOperation {
         val attemptId = SttAttemptIdentity.forInitialSnapshot(
             sessionId = sessionId,
             sourceAttachmentId = expected.attachmentId,
-            requestProfileId = requestProfileId,
         )
         val existing = store.readSttAttemptOrNull(sessionId, attemptId)
 
@@ -52,7 +51,7 @@ internal object SourceSnapshotOperation {
                 // Pre-journal sessions that already completed remain valid and need no provider work.
                 return@runCatching before
             }
-            requireAttemptMatchesBoundSnapshot(existing, before, expected, requestProfileId, activeSnapshot)
+            requireAttemptMatchesBoundSnapshot(existing, before, expected, activeSnapshot)
             when (existing.phase) {
                 SttAttemptPhase.RECEIVED -> {
                     store.markSttAttemptAdopted(existing.copy(phase = SttAttemptPhase.ADOPTED))
@@ -75,7 +74,10 @@ internal object SourceSnapshotOperation {
         }
 
         if (existing != null) {
-            requireAttemptMatchesCurrentToken(existing, token, expected, requestProfileId)
+            // The operation identity deliberately survives request-profile changes. A SENT attempt
+            // from an older app/profile is still an unknown remote outcome and must block repost.
+            // A RECEIVED snapshot is already accepted durable evidence and is reused as-is.
+            requireAttemptMatchesCurrentSourceFence(existing, token, expected)
             when (existing.phase) {
                 SttAttemptPhase.SENT -> throw UnknownSttRemoteOutcomeException(existing.attemptId)
                 SttAttemptPhase.RECEIVED -> {
@@ -85,7 +87,7 @@ internal object SourceSnapshotOperation {
                     return@runCatching manifest
                 }
                 SttAttemptPhase.ADOPTED -> error("ADOPTED STT attempt without snapshot-bound manifest")
-                SttAttemptPhase.PREPARED -> Unit // No submission happened; safe to rebuild local evidence.
+                SttAttemptPhase.PREPARED -> Unit // No submission happened; safe to rebuild local evidence/profile.
             }
         }
 
@@ -129,17 +131,15 @@ internal object SourceSnapshotOperation {
         }
     }
 
-    private fun requireAttemptMatchesCurrentToken(
+    private fun requireAttemptMatchesCurrentSourceFence(
         attempt: SttAttemptReceipt,
         token: SourceBindingToken,
         expected: SourceAttachment,
-        requestProfileId: String,
     ) {
         check(attempt.sessionId == token.sessionId &&
             attempt.epoch == token.epoch &&
             attempt.expectedManifestRevision == token.revision &&
-            attempt.sourceAttachmentId == expected.attachmentId &&
-            attempt.requestProfileId == requestProfileId) {
+            attempt.sourceAttachmentId == expected.attachmentId) {
             "durable STT attempt belongs to stale source/session evidence"
         }
     }
@@ -148,12 +148,10 @@ internal object SourceSnapshotOperation {
         attempt: SttAttemptReceipt,
         manifest: SessionManifest,
         expected: SourceAttachment,
-        requestProfileId: String,
         activeSnapshot: SourceSnapshot,
     ) {
         check(attempt.sessionId == manifest.sessionId &&
-            attempt.sourceAttachmentId == expected.attachmentId &&
-            attempt.requestProfileId == requestProfileId) {
+            attempt.sourceAttachmentId == expected.attachmentId) {
             "snapshot-bound STT attempt identity mismatch"
         }
         val snapshot = requireNotNull(attempt.snapshot) { "completed STT attempt is missing snapshot" }

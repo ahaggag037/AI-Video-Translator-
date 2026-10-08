@@ -76,10 +76,17 @@ internal data class SttAttemptReceipt(
 }
 
 internal object SttAttemptIdentity {
-    fun forInitialSnapshot(sessionId: String, sourceAttachmentId: String, requestProfileId: String): String {
+    /**
+     * The durable operation key intentionally excludes the request profile. A profile/app upgrade
+     * must still discover an older SENT attempt and preserve UNKNOWN_REMOTE_OUTCOME rather than
+     * minting a new key and accidentally reposting a possibly successful paid request.
+     *
+     * requestProfileId remains part of the receipt itself. A PREPARED-only attempt may refresh it
+     * because no transport has run; SENT/RECEIVED identity is immutable thereafter.
+     */
+    fun forInitialSnapshot(sessionId: String, sourceAttachmentId: String): String {
         require(isSafeId(sessionId) && isSafeId(sourceAttachmentId)) { "invalid STT attempt identity input" }
-        require(requestProfileId.isNotBlank()) { "blank STT request profile identity" }
-        val fields = listOf("stt-initial-attempt-v1", sessionId, sourceAttachmentId, requestProfileId)
+        val fields = listOf("stt-initial-source-operation-v1", sessionId, sourceAttachmentId)
         val canonical = fields.joinToString("") { value ->
             "${value.toByteArray(Charsets.UTF_8).size}:$value"
         }

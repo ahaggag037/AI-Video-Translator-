@@ -54,7 +54,6 @@ class SourceSnapshotOperationInstrumentedTest {
     private fun attemptId(attachment: SourceAttachment) = SttAttemptIdentity.forInitialSnapshot(
         sessionId = "session-1",
         sourceAttachmentId = attachment.attachmentId,
-        requestProfileId = NvidiaSttWireContract.PROFILE.profileId,
     )
 
     private fun rejected(block: () -> Unit) {
@@ -151,7 +150,7 @@ class SourceSnapshotOperationInstrumentedTest {
         assertEquals(0, requests)
         assertEquals(2L, store.readManifest("session-1").epoch)
         assertNull(store.readActiveSourceSnapshot("session-1"))
-        rejected { owned!!.prepareFirstMinute() } // use closed even on a pre-decode failure.
+        rejected { owned!!.prepareFirstMinute() }
     }
 
     @Test fun epochDriftDuringSubmissionRejectsResponseAndNeverRetries() = withSource { _, uri, root, store ->
@@ -265,5 +264,35 @@ class SourceSnapshotOperationInstrumentedTest {
         assertEquals(SourceBindingState.ATTACHMENT_BOUND, reopened.readManifest("session-1").sourceBindingState)
         assertNull(reopened.readActiveSourceSnapshot("session-1"))
         assertEquals(SttAttemptPhase.SENT, reopened.readSttAttemptOrNull("session-1", id)!!.phase)
+    }
+
+    @Test fun sentAttemptFromOlderRequestProfileStillBlocksAutomaticResubmission() = withSource { _, uri, _, store ->
+        val attachment = bind(store, uri)
+        val manifest = store.readManifest("session-1")
+        val id = attemptId(attachment)
+        val oldProfilePrepared = SttAttemptReceipt(
+            attemptId = id,
+            sessionId = "session-1",
+            epoch = manifest.epoch,
+            expectedManifestRevision = manifest.revision,
+            sourceAttachmentId = attachment.attachmentId,
+            requestProfileId = "legacy-stt-profile-before-upgrade",
+            sampleSha256 = "0".repeat(64),
+            phase = SttAttemptPhase.PREPARED,
+        )
+        store.persistPreparedSttAttempt(oldProfilePrepared)
+        store.markSttAttemptSent(oldProfilePrepared.copy(phase = SttAttemptPhase.SENT))
+
+        var providerCalls = 0
+        val resumed = SourceSnapshotOperation.run(context, store, "session-1", transcribe = {
+            providerCalls++
+            error("profile upgrade must not mint a new attempt and repost")
+        })
+        assertTrue(resumed.isFailure)
+        assertTrue(resumed.exceptionOrNull() is UnknownSttRemoteOutcomeException)
+        assertEquals(0, providerCalls)
+        val durable = store.readSttAttemptOrNull("session-1", id)!!
+        assertEquals(SttAttemptPhase.SENT, durable.phase)
+        assertEquals("legacy-stt-profile-before-upgrade", durable.requestProfileId)
     }
 }
