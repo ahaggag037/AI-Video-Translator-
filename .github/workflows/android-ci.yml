@@ -2,9 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ main, 'build/**' ]
+    branches: [ main, 'build/**', 'agent/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'build/p0g-translation-subtitle-v1' ]
 
 jobs:
   build:
@@ -12,6 +12,21 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Record exact candidate identity
+        run: |
+          mkdir -p .clw/out
+          {
+            echo "checkout_sha=$(git rev-parse HEAD)"
+            echo "event=${GITHUB_EVENT_NAME}"
+            echo "head_ref=${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+            echo "base_ref=${GITHUB_BASE_REF:-}"
+          } | tee .clw/out/candidate-identity.txt
+
+      - name: Validate CLW static reservation state
+        run: python3 .clw/validate_control.py
 
       - uses: actions/setup-java@v5
         with:
@@ -45,6 +60,16 @@ jobs:
         run: |
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
           sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.apk.sha256
+
+      - name: Upload CLW control evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clw-control-evidence
+          path: |
+            .clw/out/candidate-identity.txt
+            .clw/out/control-evidence.json
+          if-no-files-found: warn
 
       - name: Upload verification reports
         if: always()
