@@ -127,4 +127,6 @@ fun RequestReceipt.adoptionFence(): RequestAdoptionFence = RequestAdoptionFence(
 )
 
 internal fun isSafeId(value: String): Boolean =
-    value.length in 1..128 && value.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
+    value != "." && value != ".." && value.length in 1..128 &&
+        value.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
+

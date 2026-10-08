@@ -17,6 +17,8 @@ fun interface SessionStoreFaultInjector {
 
     fun afterAtomicPayloadWritten(file: File) = Unit
 
+    fun afterSourceAttachmentPublished(sessionId: String, attachmentId: String) = Unit
+
     companion object {
         val NONE = SessionStoreFaultInjector { _, _, _ -> }
     }
@@ -43,6 +45,82 @@ class TranslationSessionStore(
     }
 
     fun readManifest(sessionId: String): SessionManifest = synchronized(writerLock) { readManifestUnlocked(sessionId) }
+
+    /**
+     * Additive B012 prerequisite, not wired to production UI. Only binds a NEW empty session.
+     * Reattachment/migration of legacy/manual history needs an explicit snapshot/rebase contract.
+     * Publish the immutable object before its manifest reference; a failed manifest leaves an orphan
+     * that the same CAS retry can reuse. One application-owned store instance must own this root.
+     */
+    fun bindInitialSourceAttachment(
+        sessionId: String,
+        expectedRevision: Long,
+        attachment: SourceAttachment,
+    ): SessionManifest = synchronized(writerLock) {
+        val current = readManifestUnlocked(sessionId)
+        check(current.revision == expectedRevision) { "stale session revision" }
+        require(attachment.sessionId == sessionId) { "source session mismatch" }
+        check(current.sourceBindingState == SourceBindingState.UNBOUND && current.activeEntryRefs.isEmpty()) {
+            "initial source binding requires a new empty session; migration or reattachment must be explicit"
+        }
+        writeImmutableSourceAttachmentUnlocked(attachment)
+        faultInjector.afterSourceAttachmentPublished(sessionId, attachment.attachmentId)
+        val next = current.copy(
+            revision = Math.addExact(current.revision, 1L),
+            epoch = Math.addExact(current.epoch, 1L),
+            sourceBindingState = SourceBindingState.ATTACHMENT_BOUND,
+            activeSourceAttachmentRef = attachment.attachmentId,
+        )
+        writeManifestUnlocked(next)
+        next
+    }
+
+    fun readActiveSourceAttachment(sessionId: String): SourceAttachment? = synchronized(writerLock) {
+        val manifest = readManifestUnlocked(sessionId)
+        val ref = manifest.activeSourceAttachmentRef ?: return@synchronized null
+        readSourceAttachmentUnlocked(sessionId, ref)
+    }
+
+    private fun readSourceAttachmentUnlocked(sessionId: String, ref: String): SourceAttachment {
+        require(isSafeId(sessionId) && isSafeId(ref)) { "invalid source attachment path" }
+        val file = File(sessionDir(sessionId), "sources/$ref.json")
+        val json = file.inputStream().use { input ->
+            // Bound the allocation before parsing, including a corrupt/oversized private file.
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(4_096)
+            while (true) {
+                val count = input.read(buffer, 0, minOf(buffer.size, SourceAttachmentCodec.MAX_BYTES + 1 - output.size()))
+                if (count == -1) break
+                output.write(buffer, 0, count)
+                require(output.size() <= SourceAttachmentCodec.MAX_BYTES) { "source attachment too large" }
+            }
+            output.toByteArray().toString(Charsets.UTF_8)
+        }
+        return SourceAttachmentCodec.decode(json).also {
+            require(it.sessionId == sessionId && it.attachmentId == ref) { "source attachment identity mismatch" }
+        }
+    }
+
+    private fun writeImmutableSourceAttachmentUnlocked(attachment: SourceAttachment) {
+        val directory = File(sessionDir(attachment.sessionId), "sources").apply {
+            require(mkdirs() || isDirectory) { "cannot create source directory" }
+        }
+        val destination = File(directory, "${attachment.attachmentId}.json")
+        if (destination.exists()) {
+            require(readSourceAttachmentUnlocked(attachment.sessionId, attachment.attachmentId) == attachment) {
+                "immutable source attachment collision"
+            }
+            return
+        }
+        val bytes = SourceAttachmentCodec.encode(attachment).toByteArray(Charsets.UTF_8)
+        val temp = File(directory, ".${attachment.attachmentId}.${UUID.randomUUID()}.tmp")
+        try {
+            FileOutputStream(temp).use { output -> output.write(bytes); output.fd.sync() }
+            check(temp.renameTo(destination)) { "cannot publish source attachment" }
+        } finally {
+            if (temp.exists()) temp.delete()
+        }
+    }
 
     fun readActiveEntry(sessionId: String, unitId: String): StoredTranslationEntry? = synchronized(writerLock) {
         require(isSafeId(unitId)) { "invalid unit id" }
@@ -279,3 +357,4 @@ class TranslationSessionStore(
 
     private fun sessionDir(sessionId: String): File = File(sessionsRoot, sessionId)
 }
+
