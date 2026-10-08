@@ -45,6 +45,41 @@ class SrtExporterTest {
         }
     }
 
+    @Test fun intervalCrossingMillisecondBoundaryRemainsRepresentable() {
+        val srt = SrtExporter.export(
+            listOf(item(999, 1_001, "حد")),
+            SrtClockPolicy.ORIGINAL_VIDEO,
+        )
+        assertTrue(srt.contains("00:00:00,000 --> 00:00:00,001"))
+    }
+
+    @Test fun exactlyTouchingMillisecondCuesRemainValid() {
+        val srt = SrtExporter.export(
+            listOf(
+                item(0, 1_000, "الأول"),
+                item(1_000, 2_000, "الثاني"),
+            ),
+            SrtClockPolicy.ORIGINAL_VIDEO,
+        )
+        assertTrue(srt.contains("00:00:00,000 --> 00:00:00,001"))
+        assertTrue(srt.contains("00:00:00,001 --> 00:00:00,002"))
+    }
+
+    @Test fun laterCueThatCollapsesStillFailsClosed() {
+        try {
+            SrtExporter.export(
+                listOf(
+                    item(0, 1_000, "الأول"),
+                    item(1_100, 1_900, "الثاني"),
+                ),
+                SrtClockPolicy.ORIGINAL_VIDEO,
+            )
+            fail("each cue must remain representable after millisecond quantization")
+        } catch (error: IllegalArgumentException) {
+            assertEquals("SRT_TIMELINE_NOT_REPRESENTABLE", error.message)
+        }
+    }
+
     @Test fun visualLineBreaksAreNotCanonicalSrtOwnership() {
         val srt = SrtExporter.export(
             listOf(item(0, 1_000_000, "السطر الدلالي\nيبقى نصا واحدا")),
