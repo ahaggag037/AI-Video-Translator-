@@ -23,9 +23,7 @@ object SessionCodec {
         .put("revision", manifest.revision)
         .put("epoch", manifest.epoch)
         .put("activeEntryRefs", JSONObject().apply {
-            manifest.activeEntryRefs.toSortedMap().forEach { (unitId, revisionId) ->
-                put(unitId, revisionId)
-            }
+            manifest.activeEntryRefs.toSortedMap().forEach { (unitId, revisionId) -> put(unitId, revisionId) }
         })
         .toString()
 
@@ -122,6 +120,8 @@ object SessionCodec {
             .put("unitId", receipt.unitId)
             .put("epoch", receipt.epoch)
             .put("requestSignature", receipt.requestSignature)
+            .put("expectedManifestRevision", receipt.expectedManifestRevision)
+            .put("expectedActiveEntryRevisionId", receipt.expectedActiveEntryRevisionId ?: JSONObject.NULL)
             .put("phase", receipt.phase.name)
         receipt.outcome?.let { outcome ->
             root.put("outcome", JSONObject()
@@ -167,6 +167,8 @@ object SessionCodec {
             unitId = root.getString("unitId"),
             epoch = root.getLong("epoch"),
             requestSignature = root.getString("requestSignature"),
+            expectedManifestRevision = root.getLong("expectedManifestRevision"),
+            expectedActiveEntryRevisionId = root.optionalString("expectedActiveEntryRevisionId"),
             phase = RequestReceiptPhase.valueOf(root.getString("phase")),
             outcome = outcome,
         )

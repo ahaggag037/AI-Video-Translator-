@@ -17,19 +17,12 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         }
         val manifestFile = File(directory, "manifest.json")
         if (manifestFile.exists()) return@synchronized readManifestUnlocked(sessionId)
-        val manifest = SessionManifest(
-            sessionId = sessionId,
-            revision = 0L,
-            epoch = 0L,
-            activeEntryRefs = emptyMap(),
-        )
+        val manifest = SessionManifest(sessionId = sessionId, revision = 0L, epoch = 0L, activeEntryRefs = emptyMap())
         writeManifestUnlocked(manifest)
         manifest
     }
 
-    fun readManifest(sessionId: String): SessionManifest = synchronized(writerLock) {
-        readManifestUnlocked(sessionId)
-    }
+    fun readManifest(sessionId: String): SessionManifest = synchronized(writerLock) { readManifestUnlocked(sessionId) }
 
     fun readActiveEntry(sessionId: String, unitId: String): StoredTranslationEntry? = synchronized(writerLock) {
         require(isSafeId(unitId)) { "invalid unit id" }
@@ -38,22 +31,19 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         readEntryUnlocked(sessionId, unitId, revisionId)
     }
 
-    fun commitEntry(
-        sessionId: String,
-        expectedRevision: Long,
-        entry: StoredTranslationEntry,
-    ): SessionManifest = synchronized(writerLock) {
-        val current = readManifestUnlocked(sessionId)
-        check(current.revision == expectedRevision) { "stale session revision" }
-        val unitId = entry.record.unitId
-        writeImmutableEntryUnlocked(sessionId, unitId, entry)
-        val next = current.copy(
-            revision = Math.addExact(current.revision, 1L),
-            activeEntryRefs = current.activeEntryRefs + (unitId to entry.revisionId),
-        )
-        writeManifestUnlocked(next)
-        next
-    }
+    fun commitEntry(sessionId: String, expectedRevision: Long, entry: StoredTranslationEntry): SessionManifest =
+        synchronized(writerLock) {
+            val current = readManifestUnlocked(sessionId)
+            check(current.revision == expectedRevision) { "stale session revision" }
+            val unitId = entry.record.unitId
+            writeImmutableEntryUnlocked(sessionId, unitId, entry)
+            val next = current.copy(
+                revision = Math.addExact(current.revision, 1L),
+                activeEntryRefs = current.activeEntryRefs + (unitId to entry.revisionId),
+            )
+            writeManifestUnlocked(next)
+            next
+        }
 
     fun bumpEpoch(sessionId: String, expectedRevision: Long): SessionManifest = synchronized(writerLock) {
         val current = readManifestUnlocked(sessionId)
@@ -70,6 +60,10 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         val manifest = readManifestUnlocked(receipt.sessionId)
         if (receipt.phase == RequestReceiptPhase.PREPARED) {
             check(manifest.epoch == receipt.epoch) { "cannot prepare request for stale epoch" }
+            check(manifest.revision == receipt.expectedManifestRevision) { "cannot prepare request for stale manifest" }
+            check(manifest.activeEntryRefs[receipt.unitId] == receipt.expectedActiveEntryRevisionId) {
+                "cannot prepare request for stale entry"
+            }
         }
         val directory = File(sessionDir(receipt.sessionId), "requests").apply {
             require(mkdirs() || isDirectory) { "cannot create request directory" }
@@ -105,16 +99,19 @@ class TranslationSessionStore(private val sessionsRoot: File) {
     }
 
     private fun validateReceiptTransition(existing: RequestReceipt, next: RequestReceipt) {
-        require(existing.attemptId == next.attemptId && existing.sessionId == next.sessionId &&
-            existing.unitId == next.unitId && existing.epoch == next.epoch &&
-            existing.requestSignature == next.requestSignature) { "receipt identity changed" }
+        require(
+            existing.attemptId == next.attemptId && existing.sessionId == next.sessionId &&
+                existing.unitId == next.unitId && existing.epoch == next.epoch &&
+                existing.requestSignature == next.requestSignature &&
+                existing.expectedManifestRevision == next.expectedManifestRevision &&
+                existing.expectedActiveEntryRevisionId == next.expectedActiveEntryRevisionId
+        ) { "receipt identity changed" }
         if (existing == next) return
         require(next.phase.ordinal == existing.phase.ordinal + 1) { "invalid receipt phase transition" }
     }
 
     private fun readReceiptFileUnlocked(file: File): RequestReceipt {
-        val atomicFile = AtomicFile(file)
-        val bytes = atomicFile.openRead().use { input ->
+        val bytes = AtomicFile(file).openRead().use { input ->
             val data = input.readBytes()
             require(data.size <= SessionCodec.RECEIPT_MAX_BYTES) { "receipt exceeds size limit" }
             data
@@ -158,11 +155,7 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         }
     }
 
-    private fun writeImmutableEntryUnlocked(
-        sessionId: String,
-        unitId: String,
-        entry: StoredTranslationEntry,
-    ) {
+    private fun writeImmutableEntryUnlocked(sessionId: String, unitId: String, entry: StoredTranslationEntry) {
         require(isSafeId(unitId) && isSafeId(entry.revisionId)) { "invalid entry path" }
         val directory = File(sessionDir(sessionId), "entries/$unitId").apply {
             require(mkdirs() || isDirectory) { "cannot create entry directory" }
@@ -175,10 +168,7 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         }
         val temp = File(directory, ".${entry.revisionId}.${UUID.randomUUID()}.tmp")
         try {
-            FileOutputStream(temp).use { output ->
-                output.write(bytes)
-                output.fd.sync()
-            }
+            FileOutputStream(temp).use { output -> output.write(bytes); output.fd.sync() }
             check(temp.renameTo(destination)) { "cannot publish immutable entry" }
         } finally {
             if (temp.exists()) temp.delete()
@@ -192,9 +182,7 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         val bytes = file.readBytes()
         require(bytes.size <= SessionCodec.ENTRY_MAX_BYTES) { "entry exceeds size limit" }
         return SessionCodec.decodeEntry(bytes.toString(Charsets.UTF_8)).also { entry ->
-            require(entry.revisionId == revisionId && entry.record.unitId == unitId) {
-                "entry identity mismatch"
-            }
+            require(entry.revisionId == revisionId && entry.record.unitId == unitId) { "entry identity mismatch" }
         }
     }
 

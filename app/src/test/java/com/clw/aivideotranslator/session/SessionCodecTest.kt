@@ -10,10 +10,7 @@ import com.clw.aivideotranslator.semantic.ManualTranslationRevision
 import com.clw.aivideotranslator.semantic.TranslationRecord
 import com.clw.aivideotranslator.semantic.TranslationReviewState
 import org.json.JSONObject
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
+import org.junit.Assert.*
 import org.junit.Test
 
 class SessionCodecTest {
@@ -48,7 +45,7 @@ class SessionCodecTest {
         assertEquals("ترجمة آلية", restored.record.machineRevisions.single().text)
     }
 
-    @Test fun receiptRoundTripPreservesOutcomeWithoutCredentials() {
+    @Test fun receiptRoundTripPreservesOutcomeAndExactAdoptionFenceWithoutCredentials() {
         val outcome = TranslationProviderOutcome(
             transport = TransportOutcome.RESPONSE_RECEIVED,
             protocol = ProtocolOutcome.CANDIDATE,
@@ -66,11 +63,16 @@ class SessionCodecTest {
             unitId = "u1",
             epoch = 4,
             requestSignature = "sig-1",
+            expectedManifestRevision = 9,
+            expectedActiveEntryRevisionId = "entry-3",
             phase = RequestReceiptPhase.RECEIVED,
             outcome = outcome,
         )
         val encoded = SessionCodec.encodeReceipt(receipt)
-        assertEquals(receipt, SessionCodec.decodeReceipt(encoded))
+        val restored = SessionCodec.decodeReceipt(encoded)
+        assertEquals(receipt, restored)
+        assertEquals(9L, restored.adoptionFence().expectedManifestRevision)
+        assertEquals("entry-3", restored.adoptionFence().expectedActiveEntryRevisionId)
         listOf("apiKey", "Authorization", "Bearer", "credential").forEach { secretField ->
             assertFalse(encoded.contains(secretField, ignoreCase = true))
         }
@@ -83,17 +85,13 @@ class SessionCodecTest {
             unitId = "u1",
             epoch = 1,
             requestSignature = "sig",
+            expectedManifestRevision = 2,
+            expectedActiveEntryRevisionId = null,
             phase = phase,
             outcome = outcome,
         )
-        assertEquals(
-            ReceiptRecoveryDisposition.SAFE_TO_PLAN_NEW_ATTEMPT,
-            receipt(RequestReceiptPhase.PREPARED).recoveryDisposition(),
-        )
-        assertEquals(
-            ReceiptRecoveryDisposition.UNKNOWN_REMOTE_OUTCOME,
-            receipt(RequestReceiptPhase.SENT).recoveryDisposition(),
-        )
+        assertEquals(ReceiptRecoveryDisposition.SAFE_TO_PLAN_NEW_ATTEMPT, receipt(RequestReceiptPhase.PREPARED).recoveryDisposition())
+        assertEquals(ReceiptRecoveryDisposition.UNKNOWN_REMOTE_OUTCOME, receipt(RequestReceiptPhase.SENT).recoveryDisposition())
         assertEquals(
             ReceiptRecoveryDisposition.RECEIVED_AVAILABLE,
             receipt(
@@ -131,8 +129,6 @@ class SessionCodecTest {
             ),
         )
         val root = JSONObject(SessionCodec.encodeEntry(entry))
-        listOf("apiKey", "authorization", "credential", "token").forEach { key ->
-            assertFalse(root.has(key))
-        }
+        listOf("apiKey", "authorization", "credential", "token").forEach { key -> assertFalse(root.has(key)) }
     }
 }

@@ -48,6 +48,8 @@ data class RequestReceipt(
     val unitId: String,
     val epoch: Long,
     val requestSignature: String,
+    val expectedManifestRevision: Long,
+    val expectedActiveEntryRevisionId: String?,
     val phase: RequestReceiptPhase,
     val outcome: TranslationProviderOutcome? = null,
 ) {
@@ -56,6 +58,10 @@ data class RequestReceipt(
         require(isSafeId(attemptId) && isSafeId(sessionId) && isSafeId(unitId)) { "invalid receipt identity" }
         require(epoch >= 0L) { "negative receipt epoch" }
         require(requestSignature.isNotBlank()) { "blank request signature" }
+        require(expectedManifestRevision >= 0L) { "negative expected manifest revision" }
+        require(expectedActiveEntryRevisionId == null || isSafeId(expectedActiveEntryRevisionId)) {
+            "invalid expected entry revision"
+        }
         if (phase == RequestReceiptPhase.RECEIVED) require(outcome != null) { "received receipt requires outcome" }
         if (phase != RequestReceiptPhase.RECEIVED) require(outcome == null) { "pre-response receipt cannot contain outcome" }
     }
@@ -72,6 +78,15 @@ fun RequestReceipt.recoveryDisposition(): ReceiptRecoveryDisposition = when (pha
     RequestReceiptPhase.SENT -> ReceiptRecoveryDisposition.UNKNOWN_REMOTE_OUTCOME
     RequestReceiptPhase.RECEIVED -> ReceiptRecoveryDisposition.RECEIVED_AVAILABLE
 }
+
+fun RequestReceipt.adoptionFence(): RequestAdoptionFence = RequestAdoptionFence(
+    sessionId = sessionId,
+    epoch = epoch,
+    requestSignature = requestSignature,
+    expectedManifestRevision = expectedManifestRevision,
+    unitId = unitId,
+    expectedActiveEntryRevisionId = expectedActiveEntryRevisionId,
+)
 
 internal fun isSafeId(value: String): Boolean =
     value.length in 1..128 && value.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
