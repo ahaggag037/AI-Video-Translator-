@@ -1,10 +1,6 @@
 package com.clw.aivideotranslator
 
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -28,8 +24,6 @@ data class NvidiaSttResult(
 
 object NvidiaSttClient {
     const val MODEL_LABEL = "NVIDIA Parakeet CTC 1.1B (en-US)"
-    private const val ENDPOINT =
-        "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com/v1/audio/transcriptions"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -43,22 +37,7 @@ object NvidiaSttClient {
         require(cleanKey.isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
         require(wavFile.exists() && wavFile.length() > 44L) { "ملف WAV غير صالح" }
 
-        val multipart = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("language", "en-US")
-            .addFormDataPart("word_time_offsets", "True")
-            .addFormDataPart(
-                "file",
-                wavFile.name,
-                wavFile.asRequestBody("audio/wav".toMediaType()),
-            )
-            .build()
-
-        val request = Request.Builder()
-            .url(ENDPOINT)
-            .header("Authorization", "Bearer $cleanKey")
-            .post(multipart)
-            .build()
+        val request = NvidiaSttWireContract.request(cleanKey, wavFile)
 
         client.newCall(request).execute().use { response ->
             val body = response.body.string()
