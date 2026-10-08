@@ -67,7 +67,6 @@ object SourceSegmenter {
     }
 
     private fun chooseEnd(words: List<AnchoredSourceWord>, start: Int, hardEnd: Int, config: SegmenterConfig): Int {
-        if (hardEnd == words.lastIndex) return hardEnd
         val candidates = (start..hardEnd).map { index -> index to boundaryScore(words, index, config) }
         val complete = candidates.firstOrNull { candidate ->
             candidate.second >= 400 && satisfiesMeaningfulStart(words, start, candidate.first)
