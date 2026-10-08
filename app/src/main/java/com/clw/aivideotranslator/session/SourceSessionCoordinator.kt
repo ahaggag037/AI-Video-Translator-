@@ -40,8 +40,9 @@ internal object CasRetry {
  * reference, revision+epoch advance on success, legacy/manual history protection untouched.
  * Snapshots are built OUTSIDE the store lock; identical evidence yields identical immutable
  * objects, so a CAS retry republishes the same bytes rather than forking identity.
+ * Module-internal: the durable evidence plumbing intentionally never crosses the module boundary.
  */
-object SourceSessionCoordinator {
+internal object SourceSessionCoordinator {
     fun captureAndBindInitialSource(
         context: Context,
         store: TranslationSessionStore,

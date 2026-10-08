@@ -58,18 +58,23 @@ internal class SourceCaptureException(val status: SourceReadStatus, cause: Throw
  * Blocking Android capture boundary for a freshly selected source. Call from an I/O dispatcher.
  *
  * TOCTOU discipline: the provider stream is opened EXACTLY ONCE. That single stream is copied
- * into a private immutable cache file while being hashed in the same pass, and container duration
- * plus the first-audio-track descriptor are then read from that exact private copy — never from a
- * second provider open. A mutable/cloud DocumentsProvider therefore cannot serve one version to
- * the identity read and a different version to the metadata reads. The copy is deleted after
- * capture; the durable attachment keeps only the digest/size, not media bytes. No locator or
- * digest is logged; failures surface as distinct [SourceCaptureException] statuses.
+ * into a private cache file while being hashed in the same pass, and container duration plus the
+ * first-audio-track descriptor are then read from that exact private copy — never from a second
+ * provider open. A mutable/cloud DocumentsProvider therefore cannot serve one version to the
+ * identity read and a different version to the metadata reads.
  *
- * Track selection policy mirrors SttAudioPreparer so capture-time ownership and preparation-time
- * provenance describe the same track. The builder does NOT bind the attachment into the session
- * manifest; store/epoch ownership remains the separate existing CAS step. Legacy picker/probe
- * behavior is unchanged. Cost note: one full copy pass of the source; X006 will qualify the
- * performance of full-source identity work on device.
+ * Concurrency discipline: each capture owns a UNIQUE temp file and deletes it in `finally`.
+ * There is deliberately NO shared-directory sweep: an eager sweep could unlink another in-flight
+ * capture's live temp path. Crash leftovers are reclaimed by Android cache eviction, not by this
+ * class, so concurrent builders can never destroy each other's work.
+ *
+ * The durable attachment keeps only the digest/size, not media bytes. No locator or digest is
+ * logged; failures surface as distinct [SourceCaptureException] statuses. Track selection policy
+ * mirrors SttAudioPreparer so capture-time ownership and preparation-time provenance describe the
+ * same track. The builder does NOT bind the attachment into the session manifest; store/epoch
+ * ownership remains the separate existing CAS step. Legacy picker/probe behavior is unchanged.
+ * Cost note: one full copy pass of the source; X006 will qualify the performance of full-source
+ * identity work on device.
  */
 object SourceAttachmentBuilder {
     private const val BUFFER_BYTES = 64 * 1024
@@ -92,7 +97,6 @@ object SourceAttachmentBuilder {
         }.getOrDefault(false)
 
         val captureDir = File(context.cacheDir, "p0_source_capture").apply { mkdirs() }
-        sweepStaleCaptures(captureDir)
         val copy = File.createTempFile("source-capture-", ".bin", captureDir)
         try {
             val fingerprint = copyAndHashOnce(resolver, uri, copy)
@@ -191,15 +195,6 @@ object SourceAttachmentBuilder {
             error("الفيديو لا يحتوي على مسار صوت")
         } finally {
             extractor.release()
-        }
-    }
-
-    /** Best-effort removal of crash-leftover captures; never fails the current capture. */
-    private fun sweepStaleCaptures(dir: File) {
-        runCatching {
-            dir.listFiles()?.forEach { stale ->
-                if (stale.name.startsWith("source-capture-")) stale.delete()
-            }
         }
     }
 
