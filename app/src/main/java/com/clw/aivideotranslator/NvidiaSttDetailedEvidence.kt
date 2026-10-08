@@ -12,6 +12,7 @@ internal object NvidiaSttParserContract {
 internal data class NvidiaSttDetailedParse(
     val result: NvidiaSttResult,
     val timingEvidence: NvidiaSttTimingEvidence,
+    val parserVersion: String,
 )
 
 internal object NvidiaSttDetailedEvidenceParser {
@@ -20,6 +21,6 @@ internal object NvidiaSttDetailedEvidenceParser {
         // the production parser rejects.
         val result = NvidiaSttClient.parseResponse(body, httpStatus)
         val evidence = NvidiaSttTimingEvidenceInspector.inspect(body)
-        return NvidiaSttDetailedParse(result, evidence)
+        return NvidiaSttDetailedParse(result, evidence, NvidiaSttParserContract.ID)
     }
 }
