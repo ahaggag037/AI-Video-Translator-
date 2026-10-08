@@ -3,6 +3,7 @@ package com.clw.aivideotranslator
 import java.io.File
 import okio.Buffer
 import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
@@ -62,6 +63,15 @@ class NvidiaSttWireContractTest {
         }
     }
 
-    private fun okhttp3.RequestBody.utf8(): String = Buffer().also(::writeTo).readUtf8()
-    private fun okhttp3.RequestBody.bytes(): ByteArray = Buffer().also(::writeTo).readByteArray()
+    private fun RequestBody.utf8(): String {
+        val buffer = Buffer()
+        writeTo(buffer)
+        return buffer.readUtf8()
+    }
+
+    private fun RequestBody.bytes(): ByteArray {
+        val buffer = Buffer()
+        writeTo(buffer)
+        return buffer.readByteArray()
+    }
 }
