@@ -57,10 +57,14 @@ object ReceiptRecoveryPlanner {
                     ReceiptRecoveryPlan(ReceiptRecoveryAction.STALE_RECEIPT, fenceResult = fence)
                 }
             }
-            RequestReceiptPhase.SENT -> ReceiptRecoveryPlan(
-                ReceiptRecoveryAction.REQUIRE_EXPLICIT_RETRY,
-                fenceResult = SessionFencing.check(receipt.adoptionFence(), manifest, receipt.requestSignature),
-            )
+            RequestReceiptPhase.SENT -> {
+                val fence = SessionFencing.check(receipt.adoptionFence(), manifest, receipt.requestSignature)
+                if (fence == AdoptionFenceResult.CURRENT) {
+                    ReceiptRecoveryPlan(ReceiptRecoveryAction.REQUIRE_EXPLICIT_RETRY, fenceResult = fence)
+                } else {
+                    ReceiptRecoveryPlan(ReceiptRecoveryAction.STALE_RECEIPT, fenceResult = fence)
+                }
+            }
             RequestReceiptPhase.RECEIVED -> planReceived(receipt, manifest, sourceText)
         }
     }

@@ -49,10 +49,22 @@ class ReceiptRecoveryPlannerTest {
         outcome = outcome,
     )
 
-    @Test fun sentReceiptAlwaysRequiresExplicitRetryDecision() {
+    @Test fun currentSentReceiptRequiresExplicitRetryDecision() {
         val request = requestPlan("Hello")
         val plan = ReceiptRecoveryPlanner.plan(receipt(RequestReceiptPhase.SENT, request), manifest, request)
         assertEquals(ReceiptRecoveryAction.REQUIRE_EXPLICIT_RETRY, plan.action)
+        assertEquals(AdoptionFenceResult.CURRENT, plan.fenceResult)
+    }
+
+    @Test fun staleSentReceiptDoesNotOfferRetry() {
+        val request = requestPlan("Hello")
+        val plan = ReceiptRecoveryPlanner.plan(
+            receipt(RequestReceiptPhase.SENT, request),
+            manifest.copy(revision = 5),
+            request,
+        )
+        assertEquals(ReceiptRecoveryAction.STALE_RECEIPT, plan.action)
+        assertEquals(AdoptionFenceResult.STALE_MANIFEST_REVISION, plan.fenceResult)
     }
 
     @Test fun matchingReceivedCandidateCanBeRevalidatedWithoutNetwork() {
