@@ -1,0 +1,10 @@
+{
+  "schema": "clw-reservations/v0",
+  "version": 1,
+  "integration_branch": "build/p0g-translation-subtitle-v1",
+  "protected_prefixes": [
+    ".clw/",
+    ".github/workflows/"
+  ],
+  "reservations": []
+}
