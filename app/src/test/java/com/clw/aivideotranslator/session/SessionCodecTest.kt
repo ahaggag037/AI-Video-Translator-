@@ -1,5 +1,10 @@
 package com.clw.aivideotranslator.session
 
+import com.clw.aivideotranslator.provider.ContentValidationOutcome
+import com.clw.aivideotranslator.provider.PolicyOutcome
+import com.clw.aivideotranslator.provider.ProtocolOutcome
+import com.clw.aivideotranslator.provider.TranslationProviderOutcome
+import com.clw.aivideotranslator.provider.TransportOutcome
 import com.clw.aivideotranslator.semantic.MachineTranslationRevision
 import com.clw.aivideotranslator.semantic.ManualTranslationRevision
 import com.clw.aivideotranslator.semantic.TranslationRecord
@@ -41,6 +46,61 @@ class SessionCodecTest {
         assertEquals(entry, restored)
         assertEquals("تصحيح يدوي", restored.record.effectiveText())
         assertEquals("ترجمة آلية", restored.record.machineRevisions.single().text)
+    }
+
+    @Test fun receiptRoundTripPreservesOutcomeWithoutCredentials() {
+        val outcome = TranslationProviderOutcome(
+            transport = TransportOutcome.RESPONSE_RECEIVED,
+            protocol = ProtocolOutcome.CANDIDATE,
+            policy = PolicyOutcome.ALLOWED,
+            contentValidation = ContentValidationOutcome.CANDIDATE_UNVALIDATED,
+            candidateText = "ترجمة محفوظة",
+            httpStatus = 200,
+            requestId = "provider-123",
+            resolvedModel = "nvidia/model",
+            finishReason = "stop",
+        )
+        val receipt = RequestReceipt(
+            attemptId = "attempt-1",
+            sessionId = "session-1",
+            unitId = "u1",
+            epoch = 4,
+            requestSignature = "sig-1",
+            phase = RequestReceiptPhase.RECEIVED,
+            outcome = outcome,
+        )
+        val encoded = SessionCodec.encodeReceipt(receipt)
+        assertEquals(receipt, SessionCodec.decodeReceipt(encoded))
+        listOf("apiKey", "Authorization", "Bearer", "credential").forEach { secretField ->
+            assertFalse(encoded.contains(secretField, ignoreCase = true))
+        }
+    }
+
+    @Test fun receiptRecoveryStatesDoNotBlindlyResubmitSentAttempts() {
+        fun receipt(phase: RequestReceiptPhase, outcome: TranslationProviderOutcome? = null) = RequestReceipt(
+            attemptId = "attempt-1",
+            sessionId = "session-1",
+            unitId = "u1",
+            epoch = 1,
+            requestSignature = "sig",
+            phase = phase,
+            outcome = outcome,
+        )
+        assertEquals(
+            ReceiptRecoveryDisposition.SAFE_TO_PLAN_NEW_ATTEMPT,
+            receipt(RequestReceiptPhase.PREPARED).recoveryDisposition(),
+        )
+        assertEquals(
+            ReceiptRecoveryDisposition.UNKNOWN_REMOTE_OUTCOME,
+            receipt(RequestReceiptPhase.SENT).recoveryDisposition(),
+        )
+        assertEquals(
+            ReceiptRecoveryDisposition.RECEIVED_AVAILABLE,
+            receipt(
+                RequestReceiptPhase.RECEIVED,
+                TranslationProviderOutcome(TransportOutcome.RESPONSE_RECEIVED, ProtocolOutcome.EMPTY),
+            ).recoveryDisposition(),
+        )
     }
 
     @Test fun unknownSchemaFailsClosed() {

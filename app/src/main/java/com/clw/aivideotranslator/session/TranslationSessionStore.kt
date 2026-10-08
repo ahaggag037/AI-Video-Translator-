@@ -66,6 +66,62 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         next
     }
 
+    fun writeReceipt(receipt: RequestReceipt): RequestReceipt = synchronized(writerLock) {
+        val manifest = readManifestUnlocked(receipt.sessionId)
+        if (receipt.phase == RequestReceiptPhase.PREPARED) {
+            check(manifest.epoch == receipt.epoch) { "cannot prepare request for stale epoch" }
+        }
+        val directory = File(sessionDir(receipt.sessionId), "requests").apply {
+            require(mkdirs() || isDirectory) { "cannot create request directory" }
+        }
+        val file = File(directory, "${receipt.attemptId}.json")
+        if (file.exists()) {
+            val existing = readReceiptFileUnlocked(file)
+            validateReceiptTransition(existing, receipt)
+            if (existing == receipt) return@synchronized existing
+        } else {
+            require(receipt.phase == RequestReceiptPhase.PREPARED) { "receipt must begin PREPARED" }
+        }
+        writeAtomicTextUnlocked(file, SessionCodec.encodeReceipt(receipt))
+        receipt
+    }
+
+    fun readReceipt(sessionId: String, attemptId: String): RequestReceipt = synchronized(writerLock) {
+        require(isSafeId(sessionId) && isSafeId(attemptId)) { "invalid receipt path" }
+        val file = File(sessionDir(sessionId), "requests/$attemptId.json")
+        require(file.isFile) { "request receipt missing" }
+        readReceiptFileUnlocked(file)
+    }
+
+    fun listReceipts(sessionId: String): List<RequestReceipt> = synchronized(writerLock) {
+        require(isSafeId(sessionId)) { "invalid session id" }
+        readManifestUnlocked(sessionId)
+        val directory = File(sessionDir(sessionId), "requests")
+        if (!directory.isDirectory) return@synchronized emptyList()
+        directory.listFiles { file -> file.isFile && file.name.endsWith(".json") }
+            ?.sortedBy { it.name }
+            ?.map(::readReceiptFileUnlocked)
+            ?: emptyList()
+    }
+
+    private fun validateReceiptTransition(existing: RequestReceipt, next: RequestReceipt) {
+        require(existing.attemptId == next.attemptId && existing.sessionId == next.sessionId &&
+            existing.unitId == next.unitId && existing.epoch == next.epoch &&
+            existing.requestSignature == next.requestSignature) { "receipt identity changed" }
+        if (existing == next) return
+        require(next.phase.ordinal == existing.phase.ordinal + 1) { "invalid receipt phase transition" }
+    }
+
+    private fun readReceiptFileUnlocked(file: File): RequestReceipt {
+        val atomicFile = AtomicFile(file)
+        val bytes = atomicFile.openRead().use { input ->
+            val data = input.readBytes()
+            require(data.size <= SessionCodec.RECEIPT_MAX_BYTES) { "receipt exceeds size limit" }
+            data
+        }
+        return SessionCodec.decodeReceipt(bytes.toString(Charsets.UTF_8))
+    }
+
     private fun readManifestUnlocked(sessionId: String): SessionManifest {
         require(isSafeId(sessionId)) { "invalid session id" }
         val file = File(sessionDir(sessionId), "manifest.json")
@@ -84,8 +140,12 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         val directory = sessionDir(manifest.sessionId).apply {
             require(mkdirs() || isDirectory) { "cannot create session directory" }
         }
-        val atomicFile = AtomicFile(File(directory, "manifest.json"))
-        val bytes = SessionCodec.encodeManifest(manifest).toByteArray(Charsets.UTF_8)
+        writeAtomicTextUnlocked(File(directory, "manifest.json"), SessionCodec.encodeManifest(manifest))
+    }
+
+    private fun writeAtomicTextUnlocked(file: File, value: String) {
+        val atomicFile = AtomicFile(file)
+        val bytes = value.toByteArray(Charsets.UTF_8)
         var stream: FileOutputStream? = null
         try {
             stream = atomicFile.startWrite()
