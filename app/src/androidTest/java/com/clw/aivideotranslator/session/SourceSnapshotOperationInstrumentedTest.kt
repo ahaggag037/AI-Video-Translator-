@@ -5,6 +5,7 @@ import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.clw.aivideotranslator.NvidiaSttClient
+import com.clw.aivideotranslator.NvidiaSttWireContract
 import com.clw.aivideotranslator.SttAudioPreparer
 import com.clw.aivideotranslator.SttAudioProfile
 import com.clw.aivideotranslator.semantic.ClockVerificationStatus
@@ -48,6 +49,12 @@ class SourceSnapshotOperationInstrumentedTest {
         200,
         MessageDigest.getInstance("SHA-256").digest(profile.file.readBytes())
             .joinToString("") { "%02x".format(it.toInt() and 0xff) },
+    )
+
+    private fun attemptId(attachment: SourceAttachment) = SttAttemptIdentity.forInitialSnapshot(
+        sessionId = "session-1",
+        sourceAttachmentId = attachment.attachmentId,
+        requestProfileId = NvidiaSttWireContract.PROFILE.profileId,
     )
 
     private fun rejected(block: () -> Unit) {
@@ -199,5 +206,64 @@ class SourceSnapshotOperationInstrumentedTest {
             captured.requireMatches(captured.attachment.copy(
                 persistedReadGrantAtCapture = !captured.attachment.persistedReadGrantAtCapture))
         }
+    }
+
+    @Test fun receivedAttemptSurvivesReopenAndAdoptsWithoutResubmission() = withSource { _, uri, root, _ ->
+        val simulatedDeath = IOException("synthetic process death after durable RECEIVED")
+        val crashStore = TranslationSessionStore(root, object : SessionStoreFaultInjector {
+            override fun afterRecoveryEntryPublished(sessionId: String, unitId: String, revisionId: String) = Unit
+            override fun afterSttAttemptReceivedPersisted(sessionId: String, attemptId: String) {
+                throw simulatedDeath
+            }
+        })
+        val attachment = bind(crashStore, uri)
+        var providerCalls = 0
+        val first = SourceSnapshotOperation.run(context, crashStore, "session-1", transcribe = {
+            providerCalls++
+            observation(it)
+        })
+        assertSame(simulatedDeath, first.exceptionOrNull())
+        assertEquals(1, providerCalls)
+        assertEquals(SourceBindingState.ATTACHMENT_BOUND, crashStore.readManifest("session-1").sourceBindingState)
+
+        val reopened = TranslationSessionStore(root)
+        val id = attemptId(attachment)
+        val received = reopened.readSttAttemptOrNull("session-1", id)!!
+        assertEquals(SttAttemptPhase.RECEIVED, received.phase)
+        assertNotNull(received.snapshot)
+
+        val resumed = SourceSnapshotOperation.run(context, reopened, "session-1", transcribe = {
+            providerCalls++
+            error("provider must not be called after durable RECEIVED")
+        }).getOrThrow()
+        assertEquals(1, providerCalls)
+        assertEquals(SourceBindingState.SNAPSHOT_BOUND, resumed.sourceBindingState)
+        assertEquals(received.snapshot!!.snapshotId, reopened.readActiveSourceSnapshot("session-1")!!.snapshotId)
+        assertEquals(SttAttemptPhase.ADOPTED, reopened.readSttAttemptOrNull("session-1", id)!!.phase)
+    }
+
+    @Test fun sentWithoutResponseReopensAsUnknownAndNeverResubmits() = withSource { _, uri, root, store ->
+        val attachment = bind(store, uri)
+        var providerCalls = 0
+        val first = SourceSnapshotOperation.run(context, store, "session-1", transcribe = {
+            providerCalls++
+            throw IOException("synthetic response loss; outcome unknown")
+        })
+        assertTrue(first.isFailure)
+        assertEquals(1, providerCalls)
+
+        val id = attemptId(attachment)
+        assertEquals(SttAttemptPhase.SENT, store.readSttAttemptOrNull("session-1", id)!!.phase)
+        val reopened = TranslationSessionStore(root)
+        val second = SourceSnapshotOperation.run(context, reopened, "session-1", transcribe = {
+            providerCalls++
+            error("unknown remote outcome must never be auto-reposted")
+        })
+        assertTrue(second.isFailure)
+        assertTrue(second.exceptionOrNull() is UnknownSttRemoteOutcomeException)
+        assertEquals(1, providerCalls)
+        assertEquals(SourceBindingState.ATTACHMENT_BOUND, reopened.readManifest("session-1").sourceBindingState)
+        assertNull(reopened.readActiveSourceSnapshot("session-1"))
+        assertEquals(SttAttemptPhase.SENT, reopened.readSttAttemptOrNull("session-1", id)!!.phase)
     }
 }

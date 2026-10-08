@@ -21,6 +21,8 @@ fun interface SessionStoreFaultInjector {
 
     fun afterSourceSnapshotPublished(sessionId: String, snapshotId: String) = Unit
 
+    fun afterSttAttemptReceivedPersisted(sessionId: String, attemptId: String) = Unit
+
     companion object {
         val NONE = SessionStoreFaultInjector { _, _, _ -> }
     }
@@ -166,6 +168,147 @@ class TranslationSessionStore(
         val snapshot = readSourceSnapshotUnlocked(sessionId, ref)
         require(snapshot.sourceAttachmentId == manifest.activeSourceAttachmentRef) { "source snapshot binding mismatch" }
         snapshot
+    }
+
+    /** Durable STT attempt journal; separate from translation-unit request receipts by design. */
+    internal fun readSttAttemptOrNull(sessionId: String, attemptId: String): SttAttemptReceipt? =
+        synchronized(writerLock) {
+            require(isSafeId(sessionId) && isSafeId(attemptId)) { "invalid STT attempt path" }
+            readManifestUnlocked(sessionId)
+            val file = sttAttemptFileUnlocked(sessionId, attemptId, createDirectory = false)
+            if (!file.isFile) null else readSttAttemptFileUnlocked(file).also { attempt ->
+                require(attempt.sessionId == sessionId && attempt.attemptId == attemptId) {
+                    "STT attempt identity mismatch"
+                }
+            }
+        }
+
+    internal fun persistPreparedSttAttempt(prepared: SttAttemptReceipt): SttAttemptReceipt =
+        synchronized(writerLock) {
+            require(prepared.phase == SttAttemptPhase.PREPARED && prepared.snapshot == null) {
+                "STT attempt must begin PREPARED"
+            }
+            val manifest = readManifestUnlocked(prepared.sessionId)
+            requireCurrentSttAttemptFence(prepared, manifest, "prepare")
+            val file = sttAttemptFileUnlocked(prepared.sessionId, prepared.attemptId, createDirectory = true)
+            val existing = if (file.isFile) readSttAttemptFileUnlocked(file) else null
+            if (existing != null) {
+                require(existing.phase == SttAttemptPhase.PREPARED) {
+                    "cannot replace an STT attempt after submission"
+                }
+                requireSameSttAttemptIdentity(existing, prepared, allowPreparedSampleRefresh = true)
+                if (existing == prepared) return@synchronized existing
+            }
+            writeAtomicTextUnlocked(file, SttAttemptCodec.encode(prepared))
+            prepared
+        }
+
+    internal fun markSttAttemptSent(sent: SttAttemptReceipt): SttAttemptReceipt = synchronized(writerLock) {
+        require(sent.phase == SttAttemptPhase.SENT && sent.snapshot == null) {
+            "markSttAttemptSent requires SENT without snapshot"
+        }
+        val manifest = readManifestUnlocked(sent.sessionId)
+        requireCurrentSttAttemptFence(sent, manifest, "send")
+        val file = sttAttemptFileUnlocked(sent.sessionId, sent.attemptId, createDirectory = false)
+        require(file.isFile) { "STT PREPARED attempt missing" }
+        val existing = readSttAttemptFileUnlocked(file)
+        if (existing == sent) return@synchronized existing
+        require(existing.phase == SttAttemptPhase.PREPARED) { "SENT must advance PREPARED" }
+        requireSameSttAttemptIdentity(existing, sent, allowPreparedSampleRefresh = false)
+        writeAtomicTextUnlocked(file, SttAttemptCodec.encode(sent))
+        sent
+    }
+
+    internal fun persistReceivedSttAttempt(received: SttAttemptReceipt): SttAttemptReceipt =
+        synchronized(writerLock) {
+            require(received.phase == SttAttemptPhase.RECEIVED && received.snapshot != null) {
+                "persistReceivedSttAttempt requires RECEIVED snapshot"
+            }
+            val file = sttAttemptFileUnlocked(received.sessionId, received.attemptId, createDirectory = false)
+            require(file.isFile) { "STT SENT attempt missing" }
+            val existing = readSttAttemptFileUnlocked(file)
+            if (existing == received) return@synchronized existing
+            require(existing.phase == SttAttemptPhase.SENT) { "RECEIVED must advance SENT" }
+            requireSameSttAttemptIdentity(existing, received, allowPreparedSampleRefresh = false)
+            writeAtomicTextUnlocked(file, SttAttemptCodec.encode(received))
+            // This hook is intentionally after AtomicFile finishWrite so a simulated process death
+            // proves that RECEIVED survives and can be adopted without another provider request.
+            faultInjector.afterSttAttemptReceivedPersisted(received.sessionId, received.attemptId)
+            received
+        }
+
+    internal fun markSttAttemptAdopted(adopted: SttAttemptReceipt): SttAttemptReceipt =
+        synchronized(writerLock) {
+            require(adopted.phase == SttAttemptPhase.ADOPTED && adopted.snapshot != null) {
+                "markSttAttemptAdopted requires ADOPTED snapshot"
+            }
+            val file = sttAttemptFileUnlocked(adopted.sessionId, adopted.attemptId, createDirectory = false)
+            require(file.isFile) { "STT RECEIVED attempt missing" }
+            val existing = readSttAttemptFileUnlocked(file)
+            if (existing == adopted) return@synchronized existing
+            require(existing.phase == SttAttemptPhase.RECEIVED) { "ADOPTED must advance RECEIVED" }
+            requireSameSttAttemptIdentity(existing, adopted, allowPreparedSampleRefresh = false)
+            require(existing.snapshot == adopted.snapshot) { "STT adopted snapshot changed" }
+            val manifest = readManifestUnlocked(adopted.sessionId)
+            val snapshot = requireNotNull(adopted.snapshot)
+            check(manifest.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND &&
+                manifest.activeSourceAttachmentRef == adopted.sourceAttachmentId &&
+                manifest.activeSourceSnapshotRef == snapshot.snapshotId) {
+                "cannot mark STT attempt ADOPTED before exact manifest adoption"
+            }
+            writeAtomicTextUnlocked(file, SttAttemptCodec.encode(adopted))
+            adopted
+        }
+
+    private fun requireCurrentSttAttemptFence(
+        attempt: SttAttemptReceipt,
+        manifest: SessionManifest,
+        verb: String,
+    ) {
+        check(manifest.sessionId == attempt.sessionId &&
+            manifest.revision == attempt.expectedManifestRevision &&
+            manifest.epoch == attempt.epoch &&
+            manifest.sourceBindingState == SourceBindingState.ATTACHMENT_BOUND &&
+            manifest.activeSourceAttachmentRef == attempt.sourceAttachmentId &&
+            manifest.activeSourceSnapshotRef == null && manifest.activeEntryRefs.isEmpty()) {
+            "cannot $verb STT attempt under stale source/session fence"
+        }
+    }
+
+    private fun requireSameSttAttemptIdentity(
+        existing: SttAttemptReceipt,
+        next: SttAttemptReceipt,
+        allowPreparedSampleRefresh: Boolean,
+    ) {
+        require(existing.attemptId == next.attemptId && existing.sessionId == next.sessionId &&
+            existing.epoch == next.epoch && existing.expectedManifestRevision == next.expectedManifestRevision &&
+            existing.sourceAttachmentId == next.sourceAttachmentId &&
+            existing.requestProfileId == next.requestProfileId) { "STT attempt identity changed" }
+        if (!allowPreparedSampleRefresh) {
+            require(existing.sampleSha256 == next.sampleSha256) { "STT attempt sample identity changed" }
+        }
+    }
+
+    private fun sttAttemptFileUnlocked(
+        sessionId: String,
+        attemptId: String,
+        createDirectory: Boolean,
+    ): File {
+        require(isSafeId(sessionId) && isSafeId(attemptId)) { "invalid STT attempt path" }
+        val directory = File(sessionDir(sessionId), "stt_attempts")
+        if (createDirectory) require(directory.mkdirs() || directory.isDirectory) {
+            "cannot create STT attempt directory"
+        }
+        return File(directory, "$attemptId.json")
+    }
+
+    private fun readSttAttemptFileUnlocked(file: File): SttAttemptReceipt {
+        val bytes = AtomicFile(file).openRead().use { input ->
+            val data = input.readBytes()
+            require(data.size <= SttAttemptCodec.MAX_BYTES) { "STT attempt exceeds size limit" }
+            data
+        }
+        return SttAttemptCodec.decode(bytes.toString(Charsets.UTF_8))
     }
 
     private fun readSourceAttachmentUnlocked(sessionId: String, ref: String): SourceAttachment {
@@ -482,4 +625,3 @@ class TranslationSessionStore(
 
     private fun sessionDir(sessionId: String): File = File(sessionsRoot, sessionId)
 }
-
