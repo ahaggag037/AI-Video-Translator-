@@ -3,8 +3,12 @@
 ## Identity
 - Frozen baseline: `build/p0f-hardburn-mp4` @ `861aadcb36cccee83d2c86e9a0c0a03b1efe6720`.
 - Implementation branch: `build/p0g-gpt6-cleanroom-v1`.
-- Last CI-verified code checkpoint: `da521a41ec2479bcfae9bc427465ebe2f8963d6a` (`test(B012): reject invented STT profile provenance`), Android CI `37775661909` green — run ID reported by Kimi K3 via ModelBridge relay 2026-10-08; direct Actions access is unavailable from the worker vantage, so this is relay-sourced evidence, not first-hand observation.
-- Newer commits pending CI observation: `f53f7f88`, `f036c961`, `1f183761`, `9c3e99e2`, `889320e5` (see below). Do not record them as verified until exact run IDs exist.
+- Last CI-green code checkpoint: `da521a41ec2479bcfae9bc427465ebe2f8963d6a`, Android CI `37775661909` green — run ID reported by Kimi K3 via ModelBridge relay 2026-10-08; direct Actions access is unavailable from the worker vantage, so this is relay-sourced evidence.
+- CI FAILURE evidence (relay-reported by Kimi K3, exact diagnostics):
+  - `1f1837615d992dc4ffc0d4d2f29bed82185322dc`: Android CI `37792006164` FAILED in compileDebugKotlin — public function exposing internal return type (`EXPOSED_FUNCTION_RETURN_TYPE`). Lint/APK stages skipped.
+  - `889320e53ed74c253ea20a175e2546e210adeb02`: Android CI `37792432928` FAILED with the same diagnostic at `NvidiaSttClient.kt:65`.
+  - Root cause introduced at `f53f7f88`; repaired at `af56decd61b8619de581bdc5ab387c2bd0846636` (function made `internal`) plus `3dc60ce352fee76ef2a02be245b0fbedaaa27ffe` (same defect class fixed preemptively in the session coordinator).
+- Next verified-checkpoint candidate: `af56decd` — carries ALL accepted repairs; CI conclusion pending. Do not record as verified until an exact green run ID exists.
 - Exact frozen X005 PASS anchor remains `b7948478eacef67b2552d4540e4358152cf72dd6`; newer descendant CI proves compatibility only and does not move that experiment anchor.
 - Canonical design is named `ASTRA_TRANSLATION_SYSTEM_MASTERPLAN_V4_1.md` (Translation & Subtitle System V1 V4.1 Final). The canonical file itself is not currently surfaced through the active project/repository tools, so no missing text from it is being reconstructed from memory.
 
@@ -16,8 +20,9 @@ Current B012 order:
 2. live source revalidation,
 3. immutable accepted SourceSnapshot with clock status separated from semantic durability,
 4. exact audio/STT provenance needed to build that snapshot safely,
-5. production source-attachment construction boundary + transport-bound STT observation (DONE, CI pending),
-6. only then session-store binding of attachments/snapshots and controller/UI resume wiring.
+5. production source-attachment construction boundary + transport-bound STT observation (DONE pending CI),
+6. session-level CAS composition of capture→binding and evidence→snapshot→binding (DONE pending CI; `SourceSessionCoordinator`),
+7. only then controller/UI resume wiring (Task17 still gated).
 
 Task17 is still **NOT ACTIVATED**. Production Compose state, STT timing interpretation and renderer/export behavior remain legacy.
 
@@ -82,31 +87,41 @@ Task17 is still **NOT ACTIVATED**. Production Compose state, STT timing interpre
   - Reports `11549586172`, digest `sha256:748bbcaeb2ed5fb40d4f9f00ba010703ec315fb6c35cd923599ae43cd2a80a2f`.
   - APK `11549261464`, digest `sha256:b6939d89e605fe325270f155279bc82070db2695e094e1b3cade193a6c041492`.
 
-### Pure fail-closed SourceSnapshot factory (CI-verified @ da521a41)
+### Pure fail-closed SourceSnapshot factory (CI-green @ da521a41)
 - `701c350a602837bd6be0c4696450d479cbacf7fa`: factory builds UNVERIFIED snapshot strictly from exact evidence; legacy normalized word offsets dropped at the boundary.
 - `be5ddb3e91a6056104833cf1e850b326a1d55a36` + `04486acfd6916b1e0b2e89c21439bf80e52c2e93`: versioned accepted-parser identity (`nvidia-stt-legacy-parser-v1`) carried with the accepted parse.
 - `bcedad40ec0e13bb125e88d6bc2090e205a7c4a4`: RIFF32 evidence bounds tightened (`dataBytes ≤ 0xFFFFFFFF-36`, header field arithmetic).
 - `5761a18a80486cb997e5e02607f0c2b382ad3f61` + `da521a41ec2479bcfae9bc427465ebe2f8963d6a`: request profile must be explicit and current; invented/drifted profile provenance is rejected.
-- Exact verification: Android CI `37775661909` green @ `da521a41` (relay-reported by Kimi K3; worker lacks direct Actions access).
+- Exact verification: Android CI `37775661909` green @ `da521a41` (relay-reported by Kimi K3).
 
-### Transport-bound STT observation (CI PENDING)
-- `f53f7f88211c7a580b24ba446fe080c751e23233`: additive same-response detailed network path (intermediate; superseded same day by the observation type below).
-- `9c3e99e2e70ba6d883230b7accabe10e9e65b2fb`: repair of the provenance gap found by Kimi K3 (relay comment `6061834386`).
-  - `NvidiaSttTransportObservation`: immutable, module-internal ctor, binds request profile + accepted parse (+parser identity) + raw-response SHA-256 + transported-sample SHA-256 at the single response-handling point of the real HTTP call.
-  - `NvidiaSourceSnapshotFactory.buildUnverified` now consumes ONLY this observation; independently supplied parsed/profile parts can no longer reach snapshot construction (compile-time structural fence).
-  - Factory re-hashes the prepared WAV independently and requires equality with the transported-sample digest, content-binding response provenance to inspected sample bytes; post-send mutation fails closed.
-  - Legacy `transcribeEnglishSample` semantics/request/failure behavior unchanged.
-- `889320e53ed74c253ea20a175e2546e210adeb02`: falsifiers — non-current profile + valid body rejected; observation bound to sample B over preparation A rejected; garbage digest rejected; all prior fences re-pinned.
-- CI: PENDING observation (run IDs requested from Kimi K3 via relay).
+### Transport-bound redacted STT observation (repair chain, CI pending @ af56decd)
+- `f53f7f88211c7a580b24ba446fe080c751e23233`: additive same-response detailed network path (intermediate; superseded).
+- `9c3e99e2e70ba6d883230b7accabe10e9e65b2fb` / `889320e53ed74c253ea20a175e2546e210adeb02`: first observation shape + cross-pairing tests (superseded; compile-red).
+- `cac88158c1ece8fab94be23a6fe687543891a326`: repair of Kimi K3 findings (relay `6061989391`, `6062067815`):
+  - Sample bytes materialized in memory and hashed BEFORE request creation; request streams exactly those pinned bytes (`NvidiaSttWireContract.request(key, fileName, bytes)`). Streamed bytes ≡ hashed bytes; no dependence on the mutable prepared path.
+  - `NvidiaSttTransportObservation` REDACTED: exactly `{requestProfile, result, parserVersion, rawResponseSha256, sampleSha256}`; no `timingEvidence`/`rawResponseUtf8` in its graph. `rawResponseSha256` = SHA-256 of the UTF-8 JSON text as decoded (text identity, documented; not transport-octet identity).
+  - `internal bindDetailedResponse(body, status, sampleSha256)`: single response-handling point, unit-testable without provider; non-2xx mirrors legacy failure classification/messages exactly and never yields an observation.
+  - `NvidiaSourceSnapshotFactory.buildUnverified` consumes ONLY the observation; independently supplied provenance parts cannot reach snapshot construction. Factory re-inspects the prepared WAV and requires byte-identity with the observation's pre-send digest; post-anchor path replacement fails closed.
+- `741430e0253f6af69b060bb01d0f75d2a21bf30a`: discriminating falsifiers — equal-shape/different-payload A/B pairing rejection (digest fence is sole discriminator), fixed-path post-anchor replacement race rejection with swap-proof, structural redaction pin via declared-field reflection, legacy-exact non-2xx failure shapes (400/401/403/429/500 JSON-detail + non-JSON fallback), bytes-vs-file multipart byte-equivalence, malformed digest/parser rejection.
+- `af56decd61b8619de581bdc5ab387c2bd0846636`: `transcribeEnglishSampleDetailed` made `internal` (repairs `EXPOSED_FUNCTION_RETURN_TYPE` that failed CI `37792006164`/`37792432928`).
+- CI: PENDING @ `af56decd` (run IDs requested via relay).
 
-### Production source-attachment construction boundary (CI PENDING)
-- `f036c9614cea65f15342dd30ec2d8077ae199abc`: `SourceAttachmentAssembler` (pure, no I/O: refuses non-READABLE inspections, unknown durations, ranges outside observed duration; default range = full observed duration) + `SourceAttachmentBuilder` (blocking Android adapter: one full-byte identity read via `SourceContentProbe`, `MediaMetadataRetriever` duration, extractor first-audio-track descriptor with fail-soft language — same track policy as `SttAudioPreparer`).
-- The builder does NOT bind the attachment into the session manifest; store/epoch ownership remains the separate existing CAS step.
-- `1f1837615d992dc4ffc0d4d2f29bed82185322dc`: assembly fences pinned — non-readable statuses, non-positive duration, range overflow, identity sensitivity to locator/grant/fingerprint/range/track, grant-as-observation-not-permission.
-- CI: PENDING observation.
+### Production source-attachment construction boundary (repair chain, CI pending)
+- `f036c9614cea65f15342dd30ec2d8077ae199abc`: initial assembler+builder (superseded).
+- `1f1837615d992dc4ffc0d4d2f29bed82185322dc`: assembly fences pinned (non-readable statuses, non-positive duration, range overflow, identity sensitivity, grant-as-observation).
+- `4dfe670fc14073ab538f897a3f98480dcddcdc2c`: cross-open TOCTOU repair (Kimi K3 relay `6062025344`): provider stream opened EXACTLY ONCE; single pass copies+hashes into a unique private cache file; duration and first-audio-track read from that exact copy, never a second provider open. Distinct `SourceCaptureException(SourceReadStatus…)` failures.
+- `3dc60ce352fee76ef2a02be245b0fbedaaa27ffe`: eager stale-capture sweep REMOVED (Kimi K3 relay `6062252472`): each capture owns a unique temp file deleted in `finally`; crash leftovers reclaimed by Android cache eviction; concurrent builders cannot unlink each other's live temp paths.
+- CI: PENDING.
+
+### Session-level CAS composition (CI pending)
+- `e343fa2bc2f342a103085ecdba18489be0b6e686`: `SourceSessionCoordinator` — `captureAndBindInitialSource` (capture → `bindInitialSourceAttachment`) and `snapshotAndBindInitialSource` (active attachment + preparation + observation → factory → `bindInitialSourceSnapshot`), both through the existing store CAS. Snapshots built OUTSIDE the store lock; identical evidence yields identical immutable identity, so retries republish identical bytes.
+- `CasRetry` pure policy: retries ONLY while the manifest revision actually advanced; require-failures (`IllegalArgumentException`) never retried; invariant failures with unchanged revision never retried; bounded at 3 attempts.
+- `6fa100edd554f5eba4e6971869657a0c7258cd12`: 6 pinned policy tests including contention budget and identity-idempotence across retry.
+- `3dc60ce3…`: coordinator visibility made module-internal (same defect class as the client fix).
+- CI: PENDING. No UI wiring; Task17 still gated.
 
 ## Experiment status
-- X001: **HARNESS_READY_PARTIAL**. High-fidelity raw timing evidence, declared-ms/seconds ambiguity controls, nonzero-origin controls, exact audio-track/PCM provenance, request-profile identity and a transport-bound same-response observation now exist. Missing: a real provider canary atomically bound to exact sample identity + verified presentation-origin evidence. Production unit inference remains unchanged. No PASS.
+- X001: **HARNESS_READY_PARTIAL**. High-fidelity raw timing evidence, declared-ms/seconds ambiguity controls, nonzero-origin controls, exact audio-track/PCM provenance, request-profile identity and a redacted transport-bound same-response observation now exist. Missing: a real provider canary atomically bound to exact sample identity + verified presentation-origin evidence. Production unit inference remains unchanged. No PASS.
 - X002: **HARNESS_READY**. Synthetic N25 corpus/integrity validation only; no paired provider outputs or blind Arabic human scoring. No PASS.
 - X003: **HARNESS_EXECUTED_PARTIAL**. Native API29/API35 geometry controls executed; human readability and preview/export parity remain unmeasured. No PASS.
 - X004: **SHADOW_FOUNDATION_ONLY**. Pure export-media evaluator + canonical frame/preview transform model exist; no real decoded frame/audio-marker/cue-switch/preview-lag device evidence. No PASS.
@@ -123,23 +138,28 @@ Task17 is still **NOT ACTIVATED**. Production Compose state, STT timing interpre
 ## Deliberate V1 policies / known gaps
 - STT seconds-vs-ms magnitude inference remains unchanged pending X001. It is not accepted unit evidence.
 - `SttAudioPreparer.sourceStartUs` is a direct first extractor PTS observation. `sourceEndUs` is derived from PCM frame count; continuity/priming/edit-list correctness remain unaccepted.
-- Current preparer still selects the first audio track and prepares the first duration window; it is not yet selected-range aware. Therefore a snapshot builder must not invent a selected-range membership fence until the preparer itself owns that range.
-- Full-source hashing is intentionally strong resume identity evidence and may later require X006 performance measurement; do not weaken it to URI/size/mtime without evidence.
+- Current preparer still selects the first audio track and prepares the first duration window; it is not yet selected-range aware. Therefore a snapshot builder must not invent a selected-range membership fence until the preparer itself owns that range. The preparer's fixed mutable `stt_sample.wav` path is intentionally unchanged: the transport pins sample bytes in memory pre-send and the factory re-verifies byte identity, so drift fails closed without altering legacy behavior.
+- Full-source hashing is intentionally strong resume identity evidence and may later require X006 performance measurement; do not weaken it to URI/size/mtime without evidence. Source capture makes one full copy pass to a private file for the same reason (single provider open); X006 will qualify both on device.
 - A successful live probe is not TOCTOU freedom. Source-dependent operations still need current fencing/stable ownership.
 - Session-global `manifest.revision` remains an explicit safety-over-liveness X005 policy.
 - Provider timeouts remain a liveness policy, not translation request identity.
 - The transport observation's module-internal constructor means in-module tests can forge parts; the guarantee is by-construction at the single transport site plus factory re-verification of every independently checkable component (profile currency, parser identity, HTTP status, sample digest). No cryptographic response↔request binding exists because the NVCF response echoes no request fields.
+- Static audits by the worker must include Kotlin visibility exposure (`EXPOSED_*`) — the `f53f7f88` defect escaped one audit round and cost two CI runs.
 - MASTER-OS local runtime was checked during this session but its tunnel was unavailable; no external runtime persistence is being claimed.
 
 ## Active reviews
-ModelBridge relay (issue #1, `ahaggag037/Workspace-for-teera.ai`) is now the active review channel with Kimi K3:
-- Kimi REVIEW `6061834386`: caller-asserted STT provenance concern — ACCEPTED and repaired at `9c3e99e2`/`889320e5`; awaiting Kimi's re-review and CI run IDs.
-- GPT6 repair report: relay comment `6062050979`.
+ModelBridge relay (issue #1, `ahaggag037/Workspace-for-teera.ai`) is the active review channel with Kimi K3:
+- Kimi REVIEW `6061834386` (caller-asserted provenance): ACCEPTED, repaired.
+- Kimi BLOCKER-CHALLENGE `6061989391` (response↔audio binding, mutable path): ACCEPTED, repaired at `cac88158` + falsifier `741430e0`.
+- Kimi FALSIFIER-FAIL `6062067815` (late hash + non-redacted observation): ACCEPTED, repaired at `cac88158`/`741430e0`.
+- Kimi REVIEW `6062025344` (builder cross-open TOCTOU): ACCEPTED, repaired at `4dfe670f`.
+- Kimi REVIEW `6062252472` (capture-sweep race): ACCEPTED, repaired at `3dc60ce3`.
+- Kimi REPAIR-REVIEW `6062218850`: redaction + sample-byte binding ACCEPTED by reviewer; compile blocker reported and fixed at `af56decd`.
+- GPT6 repair reports: relay `6062050979`, `6062236768`, `6062297168`.
 
 ## RESUME HERE
 1. Re-check live branch HEAD and exact CI before each new dependent checkpoint. Worker cannot observe Actions directly; obtain run IDs via ModelBridge relay (Kimi K3) or the user before recording verification.
-2. Record CI evidence for `889320e5` (and intermediate `1f183761`) once run IDs arrive; until then they remain CI-PENDING, not verified.
-3. Next implementation: session-store binding path that attaches a built `SourceAttachment` through the existing manifest CAS (revision+epoch advance, legacy/manual history protection), then snapshot persistence wiring using the transport-bound observation from the live STT path. No UI activation yet.
+2. When CI for `af56decd` (or then-HEAD) settles GREEN, reconcile this doc + the acceptance ledger verified-checkpoint line to that SHA with the exact run ID/artifacts. If RED, repair first.
+3. Next implementation candidates (in order): (a) reopen/resume evaluation path composing `SourceContentProbe` + `SourceResumeEvaluator` behind the coordinator (pure decision surface, no UI); (b) session-creation boundary (single app-owned `TranslationSessionStore` root ownership contract); (c) only then controller/UI resume wiring — Task17 remains gated until (a)/(b) are owned and tested.
 4. Under `UNVERIFIED`, deliberately discard current legacy `startMs/endMs`; persist no interpreted word intervals. Do not activate X001.
 5. Do not impose `sourceStartUs ∈ selectedRange` yet: the current preparer is not range-aware. Range ownership must be moved into preparation first, then fenced.
-6. Only after store binding + snapshot persistence are owned and tested end-to-end, consider session controller/UI resume wiring (Task17 still gated).
