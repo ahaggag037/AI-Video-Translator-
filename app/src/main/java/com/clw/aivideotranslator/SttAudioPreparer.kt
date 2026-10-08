@@ -110,9 +110,13 @@ object SttAudioPreparer {
                 ?: error("تعذر معرفة ترميز مسار الصوت")
             val inputSampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val inputChannelCount = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val inputLanguage = if (inputFormat.containsKey(MediaFormat.KEY_LANGUAGE)) {
-                inputFormat.getString(MediaFormat.KEY_LANGUAGE)
-            } else null
+            // Language is additive provenance only. Malformed/unsupported language metadata must not
+            // turn a source that the legacy preparer could decode into a new preparation failure.
+            val inputLanguage = runCatching {
+                if (inputFormat.containsKey(MediaFormat.KEY_LANGUAGE)) {
+                    inputFormat.getString(MediaFormat.KEY_LANGUAGE)
+                } else null
+            }.getOrNull()
             inputTrack = SttInputAudioTrack(
                 containerIndex = audioTrackIndex,
                 mime = mime,
