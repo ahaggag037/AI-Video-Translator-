@@ -9,10 +9,28 @@ internal enum class NvidiaWordTimingSchema {
     ROOT_WORDS,
 }
 
+internal enum class NvidiaRawJsonValueType {
+    NUMBER,
+    STRING,
+    BOOLEAN,
+    NULL,
+    OBJECT,
+    ARRAY,
+    OTHER,
+}
+
+internal data class NvidiaRawTimingValueEvidence(
+    val jsonType: NvidiaRawJsonValueType,
+    val rawText: String,
+    val parsedNumber: Double?,
+)
+
 internal data class NvidiaRawWordTimingEvidence(
-    val text: String,
-    val startFields: Map<String, Double>,
-    val endFields: Map<String, Double>,
+    val itemIndex: Int,
+    val itemPath: String,
+    val text: String?,
+    val startFields: Map<String, NvidiaRawTimingValueEvidence>,
+    val endFields: Map<String, NvidiaRawTimingValueEvidence>,
 )
 
 internal data class NvidiaWordTimingSourceEvidence(
@@ -32,7 +50,9 @@ internal data class NvidiaSttTimingEvidence(
  * X001 diagnostic-only adapter.
  *
  * This deliberately preserves raw schema/field provenance without selecting a timing unit,
- * authoritative word schema, or changing NvidiaSttClient.normalizeTimes().
+ * authoritative word schema, or changing NvidiaSttClient.normalizeTimes(). Raw scalar type/text
+ * is retained alongside an optional numeric parse so evidence capture does not silently erase a
+ * present but non-numeric field. The production parser remains intentionally separate.
  */
 internal object NvidiaSttTimingEvidenceInspector {
     fun inspect(body: String): NvidiaSttTimingEvidence {
@@ -43,14 +63,15 @@ internal object NvidiaSttTimingEvidenceInspector {
             for (resultIndex in 0 until results.length()) {
                 val result = results.optJSONObject(resultIndex) ?: continue
                 val alternatives = result.optJSONArray("alternatives") ?: continue
-                if (alternatives.length() == 0) continue
-                val alternative = alternatives.optJSONObject(0) ?: continue
-                alternative.optJSONArray("words")?.let { words ->
-                    sources += sourceEvidence(
-                        schema = NvidiaWordTimingSchema.RESULTS_ALTERNATIVES_WORDS,
-                        schemaPath = "$.results[$resultIndex].alternatives[0].words",
-                        array = words,
-                    )
+                for (alternativeIndex in 0 until alternatives.length()) {
+                    val alternative = alternatives.optJSONObject(alternativeIndex) ?: continue
+                    alternative.optJSONArray("words")?.let { words ->
+                        sources += sourceEvidence(
+                            schema = NvidiaWordTimingSchema.RESULTS_ALTERNATIVES_WORDS,
+                            schemaPath = "$.results[$resultIndex].alternatives[$alternativeIndex].words",
+                            array = words,
+                        )
+                    }
                 }
             }
         }
@@ -82,11 +103,12 @@ internal object NvidiaSttTimingEvidenceInspector {
         val words = buildList {
             for (index in 0 until array.length()) {
                 val item = array.optJSONObject(index) ?: continue
-                val text = item.optString("word").ifBlank { item.optString("text") }
-                if (text.isBlank()) continue
+                val wordText = item.optionalNonBlankString("word") ?: item.optionalNonBlankString("text")
                 add(
                     NvidiaRawWordTimingEvidence(
-                        text = text,
+                        itemIndex = index,
+                        itemPath = "$schemaPath[$index]",
+                        text = wordText,
                         startFields = timingFields(item, listOf("start_time", "start", "start_ms")),
                         endFields = timingFields(item, listOf("end_time", "end", "end_ms")),
                     )
@@ -100,18 +122,49 @@ internal object NvidiaSttTimingEvidenceInspector {
         )
     }
 
-    private fun timingFields(item: JSONObject, names: List<String>): Map<String, Double> = buildMap {
+    private fun timingFields(
+        item: JSONObject,
+        names: List<String>,
+    ): Map<String, NvidiaRawTimingValueEvidence> = buildMap {
         names.forEach { name ->
-            item.optNullableDouble(name)?.let { value -> put(name, value) }
+            if (item.has(name)) put(name, timingValue(item.opt(name)))
         }
     }
 
-    private fun JSONObject.optNullableDouble(name: String): Double? {
-        if (!has(name) || isNull(name)) return null
-        return when (val value = opt(name)) {
+    private fun timingValue(value: Any?): NvidiaRawTimingValueEvidence {
+        if (value == null || value === JSONObject.NULL) {
+            return NvidiaRawTimingValueEvidence(
+                jsonType = NvidiaRawJsonValueType.NULL,
+                rawText = "null",
+                parsedNumber = null,
+            )
+        }
+        val type = when (value) {
+            is Number -> NvidiaRawJsonValueType.NUMBER
+            is String -> NvidiaRawJsonValueType.STRING
+            is Boolean -> NvidiaRawJsonValueType.BOOLEAN
+            is JSONObject -> NvidiaRawJsonValueType.OBJECT
+            is JSONArray -> NvidiaRawJsonValueType.ARRAY
+            else -> NvidiaRawJsonValueType.OTHER
+        }
+        val rawText = when (value) {
+            is String -> value
+            else -> value.toString()
+        }
+        val parsed = when (value) {
             is Number -> value.toDouble()
             is String -> value.toDoubleOrNull()
             else -> null
         }
+        return NvidiaRawTimingValueEvidence(
+            jsonType = type,
+            rawText = rawText,
+            parsedNumber = parsed,
+        )
+    }
+
+    private fun JSONObject.optionalNonBlankString(name: String): String? {
+        if (!has(name) || isNull(name)) return null
+        return (opt(name) as? String)?.takeIf { it.isNotBlank() }
     }
 }
