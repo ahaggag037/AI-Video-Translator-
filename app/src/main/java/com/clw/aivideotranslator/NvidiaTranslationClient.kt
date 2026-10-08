@@ -28,8 +28,8 @@ object NvidiaTranslationClient {
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .callTimeout(120, TimeUnit.SECONDS)
-        .followRedirects(false)
-        .retryOnConnectionFailure(false)
+        .followRedirects(NvidiaTranslationWireContract.FOLLOW_REDIRECTS)
+        .retryOnConnectionFailure(NvidiaTranslationWireContract.RETRY_ON_CONNECTION_FAILURE)
         .build()
 
     // IDs and times never cross this interface. One request owns exactly one text result.
@@ -74,10 +74,11 @@ object NvidiaTranslationClient {
         body: String,
     ): TranslationProviderOutcome {
         require(apiKey.trim().isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
+        val requestBody = body.toRequestBody(NvidiaTranslationWireContract.REQUEST_MEDIA_TYPE.toMediaType())
         val request = Request.Builder().url(endpoint)
             .header("Authorization", "Bearer ${apiKey.trim()}")
-            .header("Accept", "application/json")
-            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .header("Accept", NvidiaTranslationWireContract.ACCEPT_MEDIA_TYPE)
+            .method(NvidiaTranslationWireContract.METHOD, requestBody)
             .build()
         return suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
@@ -123,10 +124,11 @@ object NvidiaTranslationClient {
 
     suspend fun translate(apiKey: String, sourceText: String): String {
         require(apiKey.trim().isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
+        val body = requestBody(sourceText).toRequestBody(NvidiaTranslationWireContract.REQUEST_MEDIA_TYPE.toMediaType())
         val request = Request.Builder().url(ENDPOINT)
             .header("Authorization", "Bearer ${apiKey.trim()}")
-            .header("Accept", "application/json")
-            .post(requestBody(sourceText).toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .header("Accept", NvidiaTranslationWireContract.ACCEPT_MEDIA_TYPE)
+            .method(NvidiaTranslationWireContract.METHOD, body)
             .build()
         return suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
@@ -147,11 +149,11 @@ object NvidiaTranslationClient {
                                 202 -> error("NVIDIA: الطلب ما زال معلقًا؛ لم تُعتمد ترجمة")
                                 else -> error("فشل الترجمة: NVIDIA HTTP ${it.code}")
                             }
-                            val body = it.body
-                            if (body.contentLength() > 65_536) {
+                            val responseBody = it.body
+                            if (responseBody.contentLength() > 65_536) {
                                 invalidResponse("استجابة الترجمة كبيرة جدًا")
                             }
-                            val source = body.source()
+                            val source = responseBody.source()
                             source.request(65_537)
                             if (source.buffer.size > 65_536) {
                                 invalidResponse("استجابة الترجمة كبيرة جدًا")
