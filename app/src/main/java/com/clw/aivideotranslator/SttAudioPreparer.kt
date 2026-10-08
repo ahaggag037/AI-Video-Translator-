@@ -28,12 +28,56 @@ data class SttAudioProfile(
     val sizeLabel: String get() = formatBytes(sizeBytes)
 }
 
+/** Exact container-track observations used by the decoder; no track-selection policy is inferred here. */
+data class SttInputAudioTrack(
+    val containerIndex: Int,
+    val mime: String,
+    val language: String?,
+    val sampleRateHz: Int,
+    val channelCount: Int,
+) {
+    init {
+        require(containerIndex >= 0) { "negative input audio track index" }
+        require(mime.startsWith("audio/")) { "input track is not audio" }
+        require(sampleRateHz > 0) { "invalid input audio sample rate" }
+        require(channelCount > 0) { "invalid input audio channel count" }
+    }
+}
+
+data class SttAudioPreparationProvenance(
+    val inputTrack: SttInputAudioTrack,
+    /** Exact mono PCM frames written to the WAV data section. */
+    val pcmFrameCount: Long,
+) {
+    init {
+        require(pcmFrameCount > 0L) { "empty prepared PCM" }
+    }
+}
+
+data class DetailedSttAudioPreparation(
+    val profile: SttAudioProfile,
+    val provenance: SttAudioPreparationProvenance,
+)
+
 object SttAudioPreparer {
+    /** Legacy-compatible surface. Selection, WAV bytes and returned profile semantics are unchanged. */
     fun prepareFirstMinute(
         context: Context,
         sourceUri: Uri,
         durationUs: Long = STT_SAMPLE_DURATION_US,
-    ): Result<SttAudioProfile> = runCatching {
+    ): Result<SttAudioProfile> = prepareFirstMinuteDetailed(context, sourceUri, durationUs)
+        .map(DetailedSttAudioPreparation::profile)
+
+    /**
+     * Additive provenance surface for durable-session/X001 evidence plumbing.
+     * It exposes what the existing preparer actually decoded; it does not verify clock mapping,
+     * reinterpret provider timing units, or change first-audio-track selection.
+     */
+    fun prepareFirstMinuteDetailed(
+        context: Context,
+        sourceUri: Uri,
+        durationUs: Long = STT_SAMPLE_DURATION_US,
+    ): Result<DetailedSttAudioPreparation> = runCatching {
         require(durationUs > 0L) { "مدة عينة STT يجب أن تكون أكبر من صفر" }
 
         val outputDir = File(context.cacheDir, "p0_stt_audio").apply { mkdirs() }
@@ -54,6 +98,7 @@ object SttAudioPreparer {
         var sourceEndUs = 0L
         var pcmBytesWritten = 0L
         var monoFramesWritten = 0L
+        var inputTrack: SttInputAudioTrack? = null
 
         try {
             extractor.setDataSource(context, sourceUri, null)
@@ -63,14 +108,26 @@ object SttAudioPreparer {
             val inputFormat = extractor.getTrackFormat(audioTrackIndex)
             val mime = inputFormat.getString(MediaFormat.KEY_MIME)
                 ?: error("تعذر معرفة ترميز مسار الصوت")
+            val inputSampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            val inputChannelCount = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val inputLanguage = if (inputFormat.containsKey(MediaFormat.KEY_LANGUAGE)) {
+                inputFormat.getString(MediaFormat.KEY_LANGUAGE)
+            } else null
+            inputTrack = SttInputAudioTrack(
+                containerIndex = audioTrackIndex,
+                mime = mime,
+                language = inputLanguage,
+                sampleRateHz = inputSampleRate,
+                channelCount = inputChannelCount,
+            )
 
             extractor.selectTrack(audioTrackIndex)
             sourceStartUs = extractor.sampleTime
             require(sourceStartUs >= 0L) { "تعذر الوصول إلى أول عينة صوت" }
             val sourceStopUs = sourceStartUs + durationUs
 
-            outputSampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            outputChannelCount = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            outputSampleRate = inputSampleRate
+            outputChannelCount = inputChannelCount
 
             decoder = MediaCodec.createDecoderByType(mime)
             decoder.configure(inputFormat, null, null, 0)
@@ -185,15 +242,22 @@ object SttAudioPreparer {
         }
 
         require(outputFile.exists() && outputFile.length() > 44L) { "لم يتم إنشاء ملف WAV صالح" }
+        val exactInputTrack = requireNotNull(inputTrack) { "تعذر إثبات مسار الصوت المستخدم" }
 
-        SttAudioProfile(
-            file = outputFile,
-            sampleRateHz = outputSampleRate,
-            channelCount = 1,
-            bitsPerSample = 16,
-            sourceStartUs = sourceStartUs,
-            sourceEndUs = sourceEndUs,
-            durationMs = (monoFramesWritten * 1_000L / outputSampleRate),
+        DetailedSttAudioPreparation(
+            profile = SttAudioProfile(
+                file = outputFile,
+                sampleRateHz = outputSampleRate,
+                channelCount = 1,
+                bitsPerSample = 16,
+                sourceStartUs = sourceStartUs,
+                sourceEndUs = sourceEndUs,
+                durationMs = (monoFramesWritten * 1_000L / outputSampleRate),
+            ),
+            provenance = SttAudioPreparationProvenance(
+                inputTrack = exactInputTrack,
+                pcmFrameCount = monoFramesWritten,
+            ),
         )
     }
 
