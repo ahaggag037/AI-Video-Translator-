@@ -4,6 +4,7 @@ import com.clw.aivideotranslator.DetailedSttAudioPreparation
 import com.clw.aivideotranslator.NvidiaSttDetailedParse
 import com.clw.aivideotranslator.NvidiaSttParserContract
 import com.clw.aivideotranslator.NvidiaSttWireContract
+import com.clw.aivideotranslator.SttInputAudioTrack
 import com.clw.aivideotranslator.semantic.ClockVerificationStatus
 import java.io.File
 import java.nio.ByteBuffer
@@ -78,7 +79,7 @@ internal object NvidiaSourceSnapshotFactory {
         )
     }
 
-    private fun requireTrackOwnership(expected: SourceAudioTrack, observed: com.clw.aivideotranslator.SttInputAudioTrack) {
+    private fun requireTrackOwnership(expected: SourceAudioTrack, observed: SttInputAudioTrack) {
         require(expected.containerIndex == observed.containerIndex) { "prepared audio track index does not match attachment" }
         require(expected.mime == observed.mime) { "prepared audio MIME does not match attachment" }
         if (expected.language != null) {
@@ -103,10 +104,8 @@ internal object NvidiaSourceSnapshotFactory {
         val bytesPerSample = bitsPerSample / 8
         val bytesPerFrame = Math.multiplyExact(channelCount.toLong(), bytesPerSample.toLong())
         val dataBytes = Math.multiplyExact(pcmFrameCount, bytesPerFrame)
+        require(dataBytes in 1..(0xFFFF_FFFFL - 36L)) { "prepared WAV exceeds RIFF32 bounds" }
         val expectedSize = Math.addExact(44L, dataBytes)
-        require(dataBytes in 1..0xFFFF_FFFFL && expectedSize <= 0x1_0000_0023L) {
-            "prepared WAV exceeds RIFF32 bounds"
-        }
 
         val digest = MessageDigest.getInstance("SHA-256")
         val header = ByteArray(44)
@@ -155,7 +154,7 @@ internal object NvidiaSourceSnapshotFactory {
 
         val bytesPerFrame = Math.multiplyExact(channelCount.toLong(), (bitsPerSample / 8).toLong())
         val byteRate = Math.multiplyExact(sampleRateHz.toLong(), bytesPerFrame)
-        require(dataBytes + 36L <= 0xFFFF_FFFFL && byteRate <= 0xFFFF_FFFFL && bytesPerFrame <= 0xFFFF) {
+        require(byteRate <= 0xFFFF_FFFFL && bytesPerFrame <= 0xFFFF) {
             "prepared WAV header values exceed RIFF32 bounds"
         }
         require(ascii(0, 4) == "RIFF" && ascii(8, 4) == "WAVE") { "prepared file is not RIFF/WAVE" }
