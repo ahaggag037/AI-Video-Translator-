@@ -51,6 +51,32 @@ object NvidiaSttClient {
         }
     }
 
+    /**
+     * Additive same-response detailed path for durable-session/X001 evidence plumbing.
+     * The accepted parse AND the high-fidelity raw timing evidence are derived from the exact
+     * same HTTP response body of this one request — never from a re-request or a reconstructed
+     * body. Raw response bytes stay in memory only; durable layers keep their SHA-256.
+     * Legacy transcribeEnglishSample semantics, request shape and failure behavior are unchanged.
+     */
+    fun transcribeEnglishSampleDetailed(apiKey: String, wavFile: File): Result<NvidiaSttDetailedParse> = runCatching {
+        val cleanKey = apiKey.trim()
+        require(cleanKey.isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
+        require(wavFile.exists() && wavFile.length() > 44L) { "ملف WAV غير صالح" }
+
+        val request = NvidiaSttWireContract.request(cleanKey, wavFile)
+
+        client.newCall(request).execute().use { response ->
+            val body = response.body.string()
+            if (!response.isSuccessful) {
+                val detail = runCatching {
+                    JSONObject(body).optString("detail").ifBlank { body.take(300) }
+                }.getOrDefault(body.take(300))
+                error("NVIDIA HTTP ${response.code}: ${detail.ifBlank { "فشل الطلب" }}")
+            }
+            NvidiaSttDetailedEvidenceParser.parse(body, response.code)
+        }
+    }
+
     internal fun parseResponse(body: String, httpStatus: Int = 200): NvidiaSttResult {
         val root = JSONObject(body)
         val words = mutableListOf<RawWord>()
