@@ -1,47 +1,12 @@
 {
   "schema": "clw-reservations/v0",
-  "version": 2,
+  "version": 3,
   "integration_branch": "build/p0g-translation-subtitle-v1",
   "protected_prefixes": [
     ".clw/",
     ".github/workflows/"
   ],
   "reservations": [
-    {
-      "reservation_id": "LIVE-JOHNNY-B001-B003",
-      "task_id": "B001-B003",
-      "branch": "agent/johnny/b001-b002-live",
-      "status": "RUNNING",
-      "risk": "R4",
-      "control_change": true,
-      "write_set": [
-        ".clw/reservations.json",
-        "docs/B001_START_MARKER.md",
-        "docs/TRANSLATION_V1_EXECUTION_STATE.md",
-        "app/src/main/java/com/clw/aivideotranslator/tv1/TimeModels.kt",
-        "app/src/main/java/com/clw/aivideotranslator/tv1/SemanticModels.kt",
-        "app/src/main/java/com/clw/aivideotranslator/tv1/LegacySubtitleBridge.kt",
-        "app/src/main/java/com/clw/aivideotranslator/tv1/TranslationSessionStore.kt",
-        "app/src/main/java/com/clw/aivideotranslator/tv1/provider/**",
-        "app/src/test/java/com/clw/aivideotranslator/tv1/TimeAndLegacyBridgeTest.kt",
-        "app/src/test/java/com/clw/aivideotranslator/tv1/provider/**"
-      ],
-      "read_base_set": [
-        "app/src/main/java/com/clw/aivideotranslator/SubtitlePipeline.kt",
-        "app/src/main/java/com/clw/aivideotranslator/NvidiaSttClient.kt",
-        "app/src/main/java/com/clw/aivideotranslator/NvidiaTranslationClient.kt",
-        "app/src/main/java/com/clw/aivideotranslator/SttAudioPreparer.kt",
-        "app/src/main/java/com/clw/aivideotranslator/MainActivity.kt"
-      ],
-      "contract_set": [
-        "tv1-time-us",
-        "tv1-sample-clock-map",
-        "tv1-semantic-ownership",
-        "tv1-legacy-bridge",
-        "tv1-session-manifest",
-        "tv1-provider-outcomes"
-      ]
-    },
     {
       "reservation_id": "LIVE-TOM-B006",
       "task_id": "B006-X003",
