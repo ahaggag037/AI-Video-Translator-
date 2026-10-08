@@ -7,40 +7,13 @@ import com.clw.aivideotranslator.NvidiaSttTransportObservation
 import com.clw.aivideotranslator.semantic.PresentationIntervalUs
 
 /**
- * Pure CAS retry policy for session-store bindings. Retries ONLY while the manifest revision
- * actually advanced between attempts (a genuine concurrent write); invariant violations with an
- * unchanged revision propagate immediately, and IllegalArgumentException (require failures) is
- * never retried. Bounded attempts keep a permanently contended store from spinning forever.
- */
-internal object CasRetry {
-    const val MAX_ATTEMPTS = 3
-
-    fun <T> run(
-        maxAttempts: Int = MAX_ATTEMPTS,
-        readRevision: () -> Long,
-        action: (expectedRevision: Long) -> T,
-    ): T {
-        require(maxAttempts > 0) { "nonpositive CAS attempt budget" }
-        var attempts = 0
-        while (true) {
-            val expected = readRevision()
-            try {
-                return action(expected)
-            } catch (stale: IllegalStateException) {
-                attempts++
-                if (attempts >= maxAttempts || readRevision() == expected) throw stale
-            }
-        }
-    }
-}
-
-/**
  * Additive session-level composition for B012, still not wired to production UI. Connects the
  * Android capture boundary and the transport-bound STT observation to the existing manifest CAS
  * machinery without changing any store semantics: immutable object published before manifest
  * reference, revision+epoch advance on success, legacy/manual history protection untouched.
- * Snapshots are built OUTSIDE the store lock; identical evidence yields identical immutable
- * objects, so a CAS retry republishes the same bytes rather than forking identity.
+ * Evidence is built OUTSIDE the store lock under a pre-construction token. Adoption validates
+ * that token atomically; even revision-only drift fails conservatively without automatic retry.
+ * Identical immutable bytes do not authorize adoption across a new source epoch.
  * Module-internal: the durable evidence plumbing intentionally never crosses the module boundary.
  */
 internal object SourceSessionCoordinator {
@@ -50,14 +23,20 @@ internal object SourceSessionCoordinator {
         sessionId: String,
         contentUri: String,
         requestedRange: PresentationIntervalUs? = null,
-    ): Result<SessionManifest> = runCatching {
-        val attachment = SourceAttachmentBuilder
+    ): Result<SessionManifest> = captureAndBindInitialSource(store, sessionId) {
+        SourceAttachmentBuilder
             .build(context, sessionId, contentUri, requestedRange)
             .getOrThrow()
-        CasRetry.run(
-            readRevision = { store.readManifest(sessionId).revision },
-            action = { expected -> store.bindInitialSourceAttachment(sessionId, expected, attachment) },
-        )
+    }
+
+    internal fun captureAndBindInitialSource(
+        store: TranslationSessionStore,
+        sessionId: String,
+        capture: () -> SourceAttachment,
+    ): Result<SessionManifest> = runCatching {
+        val token = SourceBindingToken.from(store.readManifest(sessionId))
+        val attachment = capture()
+        store.bindInitialSourceAttachmentIfCurrent(token, attachment)
     }
 
     fun snapshotAndBindInitialSource(
@@ -65,15 +44,21 @@ internal object SourceSessionCoordinator {
         sessionId: String,
         preparation: DetailedSttAudioPreparation,
         observation: NvidiaSttTransportObservation,
+    ): Result<SessionManifest> = snapshotAndBindInitialSource(store, sessionId) { attachment ->
+        NvidiaSourceSnapshotFactory.buildUnverified(attachment, preparation, observation)
+    }
+
+    internal fun snapshotAndBindInitialSource(
+        store: TranslationSessionStore,
+        sessionId: String,
+        build: (SourceAttachment) -> SourceSnapshot,
     ): Result<SessionManifest> = runCatching {
+        val token = SourceBindingToken.from(store.readManifest(sessionId))
         val attachment = requireNotNull(store.readActiveSourceAttachment(sessionId)) {
             "no bound source attachment for snapshot"
         }
-        val snapshot = NvidiaSourceSnapshotFactory.buildUnverified(attachment, preparation, observation)
-        CasRetry.run(
-            readRevision = { store.readManifest(sessionId).revision },
-            action = { expected -> store.bindInitialSourceSnapshot(sessionId, expected, snapshot) },
-        )
+        val snapshot = build(attachment)
+        store.bindInitialSourceSnapshotIfCurrent(token, snapshot)
     }
 
     /**
@@ -91,17 +76,25 @@ internal object SourceSessionCoordinator {
         resolver: ContentResolver,
         store: TranslationSessionStore,
         sessionId: String,
+    ): Result<SourceResumeAssessment> = assessSourceResume(store, sessionId) { token, attachment ->
+        SourceContentProbe.probe(resolver, token, attachment)
+    }
+
+    internal fun assessSourceResume(
+        store: TranslationSessionStore,
+        sessionId: String,
+        probe: (SourceProbeToken, SourceAttachment) -> SourceReadObservation,
     ): Result<SourceResumeAssessment> = runCatching {
-        val manifestBefore = store.readManifest(sessionId)
-        val attachment = store.readActiveSourceAttachment(sessionId)
+        val (manifestBefore, attachment) = store.readSourceResumeInputs(sessionId)
         if (attachment == null) {
             // No immutable attachment object: UNBOUND / LEGACY_UNBOUND / CORRUPT_BINDING is the
             // evaluator's call from the current manifest state alone.
             return@runCatching SourceResumeEvaluator.evaluate(manifestBefore, null, null)
         }
         val token = SourceProbeToken.from(manifestBefore)
-        val observation = SourceContentProbe.probe(resolver, token, attachment)
+        val observation = probe(token, attachment)
         val manifestAfter = store.readManifest(sessionId)
         SourceResumeEvaluator.evaluate(manifestAfter, attachment, observation)
     }
 }
+

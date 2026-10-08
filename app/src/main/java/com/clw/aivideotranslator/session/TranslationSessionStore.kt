@@ -48,6 +48,47 @@ class TranslationSessionStore(
 
     fun readManifest(sessionId: String): SessionManifest = synchronized(writerLock) { readManifestUnlocked(sessionId) }
 
+    internal fun bindInitialSourceAttachmentIfCurrent(
+        token: SourceBindingToken,
+        attachment: SourceAttachment,
+    ): SessionManifest = synchronized(writerLock) {
+        checkSourceTokenUnlocked(token)
+        bindInitialSourceAttachment(token.sessionId, token.revision, attachment)
+    }
+
+    internal fun bindInitialSourceSnapshotIfCurrent(
+        token: SourceBindingToken,
+        snapshot: SourceSnapshot,
+    ): SessionManifest = synchronized(writerLock) {
+        checkSourceTokenUnlocked(token)
+        bindInitialSourceSnapshot(token.sessionId, token.revision, snapshot)
+    }
+
+    private fun checkSourceTokenUnlocked(token: SourceBindingToken) {
+        check(SourceBindingToken.from(readManifestUnlocked(token.sessionId)) == token) {
+            "stale source binding token; rebuild evidence under the current source epoch"
+        }
+    }
+
+    internal fun readSourceResumeInputs(sessionId: String): SourceResumeInputs = synchronized(writerLock) {
+        // Manifest/session errors are not attachment corruption and must propagate.
+        val manifest = readManifestUnlocked(sessionId)
+        val ref = manifest.activeSourceAttachmentRef
+            ?: return@synchronized SourceResumeInputs(manifest, null)
+        val attachment = try {
+            readSourceAttachmentUnlocked(sessionId, ref)
+        } catch (error: Exception) {
+            // Only this bounded file/codec boundary is classified. Do not mask programming errors
+            // in the coordinator, probe, evaluator or manifest reader.
+            when (error) {
+                is java.io.IOException, is SecurityException, is IllegalArgumentException,
+                is org.json.JSONException, is ArithmeticException -> null
+                else -> throw error
+            }
+        }
+        SourceResumeInputs(manifest, attachment)
+    }
+
     /**
      * Additive B012 prerequisite, not wired to production UI. Only binds a NEW empty session.
      * Reattachment/migration of legacy/manual history needs an explicit snapshot/rebase contract.
@@ -437,3 +478,4 @@ class TranslationSessionStore(
 
     private fun sessionDir(sessionId: String): File = File(sessionsRoot, sessionId)
 }
+
