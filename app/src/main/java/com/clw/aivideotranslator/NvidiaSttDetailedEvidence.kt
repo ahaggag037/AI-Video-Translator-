@@ -1,5 +1,10 @@
 package com.clw.aivideotranslator
 
+/** Versioned identity of the currently accepted legacy STT parser/normalizer semantics. */
+internal object NvidiaSttParserContract {
+    const val ID = "nvidia-stt-legacy-parser-v1"
+}
+
 /**
  * Diagnostic/durability bridge only. The accepted parser result remains exactly NvidiaSttClient's
  * current legacy output; timing evidence is captured beside it without selecting a schema or unit.
