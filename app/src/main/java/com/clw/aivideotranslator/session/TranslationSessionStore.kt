@@ -12,7 +12,18 @@ data class RecoveredCandidateCommitResult(
     val committedEntry: StoredTranslationEntry? = null,
 )
 
-class TranslationSessionStore(private val sessionsRoot: File) {
+fun interface SessionStoreFaultInjector {
+    fun afterRecoveryEntryPublished(sessionId: String, unitId: String, revisionId: String)
+
+    companion object {
+        val NONE = SessionStoreFaultInjector { _, _, _ -> }
+    }
+}
+
+class TranslationSessionStore(
+    private val sessionsRoot: File,
+    private val faultInjector: SessionStoreFaultInjector = SessionStoreFaultInjector.NONE,
+) {
     private val writerLock = Any()
 
     init { require(sessionsRoot.mkdirs() || sessionsRoot.isDirectory) { "cannot create session root" } }
@@ -89,6 +100,7 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         // Publish immutable history first. If the process dies before manifest publication,
         // the same frozen receipt deterministically reproduces the same immutable bytes and IDs.
         writeImmutableEntryUnlocked(sessionId, receipt.unitId, entry)
+        faultInjector.afterRecoveryEntryPublished(sessionId, receipt.unitId, entry.revisionId)
         val nextManifest = currentManifest.copy(
             revision = Math.addExact(currentManifest.revision, 1L),
             activeEntryRefs = currentManifest.activeEntryRefs + (receipt.unitId to entry.revisionId),
