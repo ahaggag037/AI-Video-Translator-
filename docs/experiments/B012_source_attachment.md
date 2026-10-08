@@ -1,54 +1,99 @@
 # B012 — Immutable source attachment / resume prerequisite
 
-State: IMPLEMENTED, API35 EMULATOR-VERIFIED, NOT ACTIVATED. Latest same-capture checkpoint: `6781ee1689181fe240f3fa63b5c1085517c51a69` (exact evidence under Scope). Earlier source-composition repair checkpoint: `b92e3807ee95757f8230fe8009d246ac02fe1c3e`; Android CI `37799782433` and recovery `37799782358` succeeded. Recovery artifact `11560945445`, SHA-256 `096394b5204fd9baa8c1dd80b4c3cb6ba3024d63401697a007f8617f19fbf30d`; downloaded archive digest and XML independently checked: 44 tests, zero failures/errors/skips, including all 13 coordinator cases. This is descendant compatibility, not a new X005 PASS or Task17 activation. The original live-probe evidence remains in Git history at `9a5f2d8d`.
+State: **IMPLEMENTED / API35 EMULATOR-VERIFIED / NOT ACTIVATED.** Current verified B012 implementation checkpoint: `253eb617ce7ef32b7f5be3d12bbb8e0c905be633`.
 
-## Contract
+Exact current evidence:
+- Android CI `37859703696`: SUCCESS (unit/lint/APK/signature/checksum/report path).
+- X005 Android Recovery `37859703620`: SUCCESS on API35 instrumentation.
+- Recovery artifact `11586211706`, archive digest `sha256:00b7513f254c7baabc30bfd5e4ef24a8377c4881747bfc7a45e9bda34e13a4a9`.
+- Downloaded XML: 58 tests, zero failures/errors/skips; 12 `SourceSnapshotOperationInstrumentedTest` cases.
+- This is descendant compatibility/extension evidence and **does not move the frozen X005 PASS anchor**.
 
-`SourceAttachment` binds a session, exact content URI, historical persisted-read-grant observation, complete byte-stream SHA-256 + byte count, typed-us selected presentation range, source duration and selected container audio-track descriptor. URI/name/size/mtime alone are not identity. Every field participates in a length-prefixed UTF-8 content address. The private JSON object has its own schema 1; manifest schema 2 and entry/receipt schema 1 remain unchanged.
+Earlier provenance checkpoints remain valid historical references:
+- same-capture checkpoint `6781ee1689181fe240f3fa63b5c1085517c51a69`: CI `37839877093`, recovery `37839876832`, artifact `11577287792` / `0cb66921e4ba305363e09673d2dd119cc87c5af40a6aa19a942f6c78121290f7`, 55 tests zero failures/errors/skips.
+- source-composition repair `b92e3807ee95757f8230fe8009d246ac02fe1c3e`: CI `37799782433`, recovery `37799782358`.
 
-`bindInitialSourceAttachment` accepts only a new UNBOUND session with no active translation entries, under expected manifest revision. It publishes the immutable object first, then atomically advances manifest revision and epoch. A crash/ENOSPC between publication and manifest commit leaves only an inactive orphan, reusable by the same validated retry. New binding invalidates old request fences. It never silently assigns old manual/legacy entries to new media. Reattachment and legacy migration remain deliberately separate operations.
+## Source attachment / snapshot contract
 
-`SourceResumeEvaluator` requires a new source observation bound to session/revision/epoch/attachment ID/locator. The old persisted-grant flag cannot prove current access. Same URI + same size + different digest is SOURCE_CHANGED. Missing, denied, unsupported and I/O failure remain distinct. Late observations are STALE_OBSERVATION. Missing/corrupt attachment fails closed while semantic/manual files remain intact.
+`SourceAttachment` binds session identity, exact content URI, historical persisted-read-grant observation, complete byte-stream SHA-256 + byte count, typed-us selected presentation range, source duration and selected container audio-track descriptor. URI/name/size/mtime alone are not identity. The private JSON object has its own bounded schema; manifest/source/snapshot decoding rejects unsupported versions, unknown/missing fields, malformed numeric types and identity mismatches.
 
-`SourceContentProbe` is the blocking Android evidence adapter. It reopens the current `content://` URI through `ContentResolver`, recomputes the complete byte-stream SHA-256 and byte count, reports current persisted-read-grant state separately, and returns typed source-read status. A stored grant never substitutes for a successful byte read. A zero-byte replacement is treated as changed/invalid source rather than a valid fingerprint. Security, missing-file and generic I/O outcomes cannot become AVAILABLE.
+Initial attachment binding is allowed only for a new empty UNBOUND session. Immutable source evidence is published before the manifest reference, then manifest revision+epoch advance atomically. Reattachment/migration of manual/legacy history remains explicit; no automatic reassignment is allowed.
 
-AVAILABLE means only that a complete read matched at the observation boundary. It is not a reusable permission token and does not authorize any gated clock/STT/render path. Future source-dependent operations must revalidate the current fence and operate on the same validated stable descriptor or private immutable copy. A provider-backed URI can mutate even after a successful hash, so this does not claim TOCTOU freedom or guarantee cloud-document availability.
+`SourceSnapshot` binds the attachment to accepted transcript/word text, exact prepared-WAV/PCM identity, STT request/result/parser/response-hash provenance and explicit observed presentation origin. UNVERIFIED clocks are structurally forbidden from carrying interpreted word intervals. X001 still owns timing-unit/origin activation.
 
-## Snapshot boundary now present
+## Live source resume evidence
 
-The accepted-source snapshot checkpoint is also implemented but still non-activating. `SourceSnapshot` binds the attachment to accepted transcript/word text, STT response/provenance identity, exact prepared-WAV/PCM identity and an explicit observed presentation origin. Unverified clocks are structurally forbidden from carrying interpreted word intervals. Snapshot publication is immutable-before-manifest and advances the source epoch, so pre-snapshot request fences cannot silently continue under new source truth. Exact descendant verification passed Android CI `37764997539` and API35 recovery `37764997633`; recovery artifact `11544187616`, digest `sha256:421184089e9377befcba273fbb274b3662a53cf45d67e1291dcb9ffbfc12e843`.
+`SourceContentProbe` reopens the current `content://` URI, recomputes complete byte-stream identity and reports current persisted-read-grant status separately. Stored permission is not current evidence. Same URI/size with changed bytes is `SOURCE_CHANGED`; missing/denied/unsupported/I/O outcomes stay distinct. `SourceResumeEvaluator` returns `STALE_OBSERVATION` for token drift and `CORRUPT_BINDING` for missing/corrupt active attachment at the bounded attachment read boundary.
 
-This snapshot contract deliberately does not bless the legacy magnitude-based STT timing normalization. X001 still owns unit/origin activation.
+`AVAILABLE` is only a point-in-time source match; it is not permission to skip operation-time fencing and does not authorize STT timing/rendering.
 
-## Scope and next boundary
+## Same-capture operation
 
-- Production `MainActivity`, `TranslationCard`, NVIDIA transport, STT unit inference, SRT and renderers are unchanged.
-- Controller/UI resume remains blocked.
-- Detailed preparation now exposes actual input-track and PCM evidence. The additive STT observation binds submitted sample bytes, accepted legacy parse, request profile, parser and response hash, without persisting the verbatim body. The factory rejects WAV replacement and drops interpreted word times under UNVERIFIED.
-- SourceSessionCoordinator now freezes a full source token BEFORE capture/factory work and adopts only under an unchanged token, atomically under the store lock. No automatic semantic CAS retry, including revision-only drift. Identical bytes are not authorization to cross epochs.
-- Reopen reads manifest+attachment under one lock. Only known attachment file/codec failures become CORRUPT_BINDING; invalid session/manifest and probe/programmer failures remain distinct failures. A successful URI probe still requires post-I/O token revalidation.
-- Application ownership checkpoint is indexed in the current Execution State. A new controller must use the single Application-owned store. This is not a multi-process/multi-writer database.
-- `6781ee1689181fe240f3fa63b5c1085517c51a69` adds CapturedSource and SourceSnapshotOperation: a recaptured source must match the bound attachment (current grant observation may differ); its private file feeds the same native decoder; a unique WAV survives through STT/factory and is cleaned with its owner. One token spans capture → decode → request → adoption. Unsupported selected ranges are rejected before I/O. The free-preparation/observation coordinator overload is removed. Android CI `37839877093` SUCCESS (unit/lint/APK/signature) and API35 recovery `37839876832` SUCCESS at `6781ee1689181fe240f3fa63b5c1085517c51a69`. Recovery artifact `11577287792`, SHA-256 `0cb66921e4ba305363e09673d2dd119cc87c5af40a6aa19a942f6c78121290f7`; downloaded archive digest and XML verified: 55 tests, zero failures/errors/skips, including all nine same-capture cases. Reports `11577088867` / `aa6cd1e2fbc53344270a127a88828371f5b12ebfc225cf9f8eef0ecd09cc6c72`; APK archive `11576799704` / `894f742af53d707c60b978ddd34cdac87a7bb9a517c9fccdd399569c5b37e77a` (archive digest)..
-- Remaining blocker: this new operation is not UI-wired and has no durable STT attempt journal. Never enable automatic resume/repost based only on an attachment-bound manifest; remote success without persisted result remains an unknown/billable outcome. Implement journal/recovery plus complete source/snapshot reopen validation first.
-- No locator/digest/transcript belongs in logs, Git or Relay. Tests use synthetic identities only.
-- Format guards: locator <=8192 UTF-16 units; source JSON <=65536 UTF-8 bytes; IDs use the existing <=128 bound and exclude `.`/`..`. These are bounded storage/input guards, not multimedia heuristics.
-- New source JSON parsing rejects wrong numeric types, unsupported versions, missing/unknown fields, content-address mismatch and out-of-range selection. Reads cap allocation before parsing.
+`CapturedSource` / `SourceSnapshotOperation` retain one private immutable source copy through the real native decoder and STT evidence/adoption path. The operation:
+- captures a source/session token before source I/O;
+- requires recaptured bytes/media descriptor to match the durable attachment;
+- decodes the private copy, not a later URI reopen;
+- owns one unique WAV through transport/factory lifetime;
+- checks the original source/session token before submission/adoption;
+- rejects unsupported selected ranges before media work;
+- fails closed on equal-size/equal-metadata byte replacement;
+- survives deletion of the original URI backing file after successful private capture;
+- never retries automatically after transport ambiguity.
 
-## Falsifiers
+The same-capture fixture matrix remains emulator evidence, not X001/physical-device acceptance.
 
-JVM: every attachment field changes identity; strict round trip including microseconds >2^53; no numeric-string coercion; valid-JSON content mutation rejected; permission revocation, replaced bytes under same URI/size, stale epoch/revision/session/locator and legacy-unbound classification.
+## Durable STT attempt/recovery — now implemented
 
-Android attachment/store: initial bind/restart; crash after immutable publish; manifest ENOSPC rollback/retry; prepared-send fencing; stale CAS; missing/tampered/oversized object; manual history and v1 legacy attachment refusal; dot-session path traversal.
+`253eb617...` closes the previously documented missing STT-attempt journal around `SourceSnapshotOperation`.
 
-Android live probe: a real `ContentResolver` read reproduces the full expected fingerprint without inventing persisted permission; same-URI byte replacement becomes SOURCE_CHANGED; zero-byte replacement fails closed as changed/invalid; deleted source becomes SOURCE_MISSING; unsupported non-content schemes are never opened; token/attachment mismatch is rejected before observation creation.
+Lifecycle:
 
-Android snapshot/store: bind/restart; crash after immutable snapshot publication; manifest ENOSPC rollback/retry; binding fences prepared sends; wrong attachment and stale CAS are rejected; missing/corrupt/oversized active snapshot fails closed. Existing X005 instrumentation reruns as the compatibility check.
+`PREPARED → SENT → RECEIVED → ADOPTED`
 
-Android coordinator: capture/snapshot epoch mutation DURING evidence construction must reject before immutable publication, with one builder invocation; competing capture cannot overwrite the winner; unchanged bind survives reopen. Missing/malformed/identity-mismatched/oversized/unreadable/integer-overflow attachment yields typed CORRUPT_BINDING without probe or manifest mutation. Invalid manifest/session and probe defects remain failures. Probe epoch drift stays STALE_OBSERVATION. These are deterministic interleavings exercising production composition, not a model of an isolated retry loop.
+Semantics:
+- **PREPARED**: durable local intent/evidence; transport has not run.
+- **SENT**: persisted before transport callback can run. If the process dies or response is lost now, the remote outcome is unknown and automatic repost is forbidden.
+- **RECEIVED**: accepted redacted `SourceSnapshot` is persisted atomically before manifest adoption. A process death in this window can reopen and reuse the result with zero additional provider calls.
+- **ADOPTED**: written only after the manifest references the exact snapshot.
 
-Native same-capture tests use generated AAC tone fixtures (provenance under androidTest assets): same URI/size/track/duration with different bytes must fail before a fake submission; deleting the URI backing file after capture must not affect decode; private PCM/track/timing equals legacy output on the same fixture/device; independent captures have independent WAV lifetimes; epoch drift before send/at response rejects; transport failure does not retry; unsupported selection never opens media. No live provider call or X001 clock proof.
+Important identity property:
+- The operation key is stable across request-profile upgrades: it is derived from session + source attachment, while historical request profile remains recorded inside the receipt. Therefore an unresolved older `SENT` attempt cannot disappear merely because a newer build uses a different request profile.
+- A verified regression persists `SENT` under a synthetic older profile, invokes current code and confirms **zero provider calls** plus `UNKNOWN_REMOTE_OUTCOME`.
 
-## Rollback
+Privacy/trust boundary:
+- The journal stores the redacted accepted snapshot/provenance, never the verbatim provider response body.
+- Sample digest is bound before/through transport evidence and checked against the durable attempt/snapshot identity.
 
-All new behavior is additive/unwired. Revert source methods/callers together if needed; preserve private source/snapshot objects and existing translation/manual entries. Older manifest-v2 code reads the manifest shape but must not be treated as source-resume capable. Never relabel a v2 manifest as v1 to make an older build accept it. Gate statuses remain unchanged until their own accepted evidence exists.
+Bounded liveness caveat:
+- A historical PREPARED-only receipt from a different request profile currently fails closed instead of automatically refreshing to the new profile. Because PREPARED means transport has not run, this is safe with respect to duplicate billing; it is a future liveness/migration refinement rather than an activation correctness hole.
 
+## Scope / activation boundary
+
+Still unchanged:
+- Production `MainActivity`, legacy NVIDIA transport entry flow, timing-unit inference, SRT/renderers and legacy preview/hard-burn remain the active comparator where gates are not accepted.
+- Task17/controller/UI ownership is **NOT ACTIVATED**.
+- No X001–X006 state is promoted by this B012 descendant.
+- X005 PASS remains frozen at `b7948478eacef67b2552d4540e4358152cf72dd6`.
+
+## Next boundary: full source/snapshot reopen validation
+
+The journal removes the duplicate-cost/recovery ambiguity, but the project still needs one explicit reopen composition before Task17:
+1. `SNAPSHOT_BOUND + valid snapshot`: preserve semantic snapshot after restart; require a fresh source probe for current availability; do not authorize timing/render gates.
+2. `SNAPSHOT_BOUND + missing/corrupt/oversized/identity-mismatched snapshot`: typed/local reopen-blocking state, no source/STT provider call and no semantic/manual/manifest mutation.
+3. `ATTACHMENT_BOUND + SENT`: surface unknown remote outcome, zero provider calls.
+4. `ATTACHMENT_BOUND + RECEIVED`: recover/adopt the durable snapshot with zero provider calls.
+5. Preserve existing attachment `CORRUPT_BINDING`, source `STALE_OBSERVATION`, and invalid manifest/programmer-failure distinctions.
+
+First falsifier: restart a valid SNAPSHOT_BOUND session, then independently delete/corrupt/oversize the active snapshot. Reopen assessment must return a typed blocking result without provider/STT calls or mutation; a valid control must reopen unchanged.
+
+## Existing falsifier coverage
+- Attachment/content addressing and strict codec round trips.
+- Initial bind/restart, immutable-before-manifest crash windows and ENOSPC rollback/retry.
+- URI probe replacement/missing/permission/unsupported/stale-token cases.
+- Snapshot bind/restart, wrong attachment, stale CAS and missing/corrupt/oversized snapshot fail-closed reads.
+- Coordinator early/late epoch mutation, typed corrupt attachment and stale probe behavior.
+- Native same-capture fixtures: equal-size/equal-metadata byte replacement; URI deletion after capture; private-vs-legacy PCM/provenance/timing equality; independent WAV lifetimes; unsupported range; transport failure/no retry.
+- STT journal: durable RECEIVED process-death recovery without resubmission; SENT/no-response reopen as unknown outcome with no resubmission; older-profile SENT remains discoverable and blocks repost.
+
+## Rollback / non-goals
+All B012 work remains additive/unwired. Revert source/STT-recovery batches coherently if required; preserve durable objects/history on downgrade. Do not relabel schema versions to force older code to accept newer state. No B012 evidence authorizes timing/translation/layout/parity gate promotion. No locator/digest/private transcript belongs in logs or relay; synthetic test identities only.
