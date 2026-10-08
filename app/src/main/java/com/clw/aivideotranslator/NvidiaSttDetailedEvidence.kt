@@ -8,6 +8,8 @@ internal object NvidiaSttParserContract {
 /**
  * Diagnostic/durability bridge only. The accepted parser result remains exactly NvidiaSttClient's
  * current legacy output; timing evidence is captured beside it without selecting a schema or unit.
+ * NOTE: NvidiaSttDetailedParse nests NvidiaSttTimingEvidence.rawResponseUtf8 (the verbatim provider
+ * body). It is X001-diagnostic-only and must never flow into durable/persisted/relayed structures.
  */
 internal data class NvidiaSttDetailedParse(
     val result: NvidiaSttResult,
@@ -25,28 +27,35 @@ internal object NvidiaSttDetailedEvidenceParser {
     }
 }
 
+private fun isLowerSha256Evidence(value: String): Boolean =
+    value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
+
 /**
- * Immutable transport-bound observation of one actual hosted STT call. The request profile,
- * accepted parse (with parser identity), raw-response provenance and transported-sample digest
- * are bound together at the single response-handling point of the STT transport boundary, so a
- * durable snapshot never has to trust independently supplied provenance parts. The constructor
- * is module-internal: production instances originate only from the transport boundary; tests may
- * build fakes, but the snapshot factory still rejects any part that drifts from current contracts.
- * Raw response bytes stay in memory only; this object carries their SHA-256, not the body.
+ * Immutable REDACTED transport-bound observation of one actual hosted STT call, constructed only at
+ * the single response-handling point of the STT transport boundary. It deliberately carries NO
+ * verbatim response body: accepted result + parser identity + digests only. `rawResponseSha256` is
+ * SHA-256 of the UTF-8 JSON text exactly as decoded by the response handler (UTF-8 text identity,
+ * not transport-octet identity; identical definition to NvidiaSttTimingEvidenceInspector).
+ * `sampleSha256` is SHA-256 of the exact WAV bytes that were materialized in memory and streamed by
+ * this request — pinned BEFORE the request body could observe any mutation of the source path.
+ * The module-internal constructor means production instances originate only from the transport
+ * boundary; tests may build fakes, but the snapshot factory re-verifies every checkable component
+ * (profile currency, parser identity, HTTP status, sample digest against a fresh file inspection).
  */
 internal data class NvidiaSttTransportObservation internal constructor(
     val requestProfile: NvidiaSttRequestProfile,
-    val parsed: NvidiaSttDetailedParse,
-    /** SHA-256 of the exact WAV bytes handed to the HTTP transport for this response. */
+    val result: NvidiaSttResult,
+    val parserVersion: String,
+    val rawResponseSha256: String,
     val sampleSha256: String,
 ) {
     init {
-        require(sampleSha256.length == 64 && sampleSha256.all { it in '0'..'9' || it in 'a'..'f' }) {
-            "invalid transported sample SHA-256"
-        }
+        require(parserVersion.isNotBlank() && parserVersion.length <= 512 &&
+            parserVersion.none(Char::isISOControl)) { "invalid accepted STT parser identity" }
+        require(result.httpStatus in 100..599) { "invalid STT HTTP status" }
+        require(isLowerSha256Evidence(rawResponseSha256)) { "invalid raw response SHA-256" }
+        require(isLowerSha256Evidence(sampleSha256)) { "invalid transported sample SHA-256" }
     }
 
-    val rawResponseSha256: String get() = parsed.timingEvidence.rawResponseSha256
-    val httpStatus: Int get() = parsed.result.httpStatus
-    val parserVersion: String get() = parsed.parserVersion
+    val httpStatus: Int get() = result.httpStatus
 }

@@ -53,14 +53,13 @@ object NvidiaSttClient {
     }
 
     /**
-     * Additive same-response transport boundary for durable-session/X001 evidence plumbing.
-     * The request profile, accepted parse and transported-sample digest are bound into ONE
-     * observation at the single point where this request's response is handled — never from a
-     * re-request, a reconstructed body, or independently supplied provenance parts. Raw response
-     * bytes stay in memory only; durable layers keep their SHA-256. The sample digest is taken
-     * from the WAV at this boundary and later re-verified against an independent re-inspection
-     * of the same prepared file, so post-send mutation fails closed instead of laundering
-     * provenance. Legacy transcribeEnglishSample semantics/request/failure behavior unchanged.
+     * Additive transport boundary for durable-session evidence plumbing. The exact sample bytes are
+     * materialized in memory and hashed BEFORE the request exists, the request streams exactly those
+     * bytes, and the redacted observation (accepted result + parser identity + UTF-8 text digest of
+     * the response + pre-send sample digest) is bound at the single response-handling point. The
+     * verbatim response body never enters the observation graph. Non-2xx handling is byte-identical
+     * in classification/message to the legacy path and never produces an observation. Legacy
+     * transcribeEnglishSample semantics/request/failure behavior are unchanged.
      */
     fun transcribeEnglishSampleDetailed(
         apiKey: String,
@@ -70,37 +69,46 @@ object NvidiaSttClient {
         require(cleanKey.isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
         require(wavFile.exists() && wavFile.length() > 44L) { "ملف WAV غير صالح" }
 
-        val request = NvidiaSttWireContract.request(cleanKey, wavFile)
+        // Authoritative sample anchor: these in-memory bytes are what the request will stream.
+        val sampleBytes = wavFile.readBytes()
+        require(sampleBytes.size.toLong() == wavFile.length()) { "prepared WAV changed while being read" }
+        val sampleSha256 = sha256Bytes(sampleBytes)
+
+        val request = NvidiaSttWireContract.request(cleanKey, wavFile.name, sampleBytes)
 
         client.newCall(request).execute().use { response ->
-            val body = response.body.string()
-            if (!response.isSuccessful) {
-                val detail = runCatching {
-                    JSONObject(body).optString("detail").ifBlank { body.take(300) }
-                }.getOrDefault(body.take(300))
-                error("NVIDIA HTTP ${response.code}: ${detail.ifBlank { "فشل الطلب" }}")
-            }
-            NvidiaSttTransportObservation(
-                requestProfile = NvidiaSttWireContract.PROFILE,
-                parsed = NvidiaSttDetailedEvidenceParser.parse(body, response.code),
-                sampleSha256 = sha256File(wavFile),
-            )
+            bindDetailedResponse(response.body.string(), response.code, sampleSha256)
         }
     }
 
-    private fun sha256File(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().buffered().use { input ->
-            val buffer = ByteArray(64 * 1024)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                if (read == 0) continue
-                digest.update(buffer, 0, read)
-            }
+    /**
+     * Single response-handling point for the durable STT path. Separated from the network call so
+     * the failure/binding contract is unit-testable without a provider. Failure semantics mirror
+     * the legacy handler exactly; a non-2xx status yields an exception, never an observation.
+     */
+    internal fun bindDetailedResponse(
+        body: String,
+        httpStatus: Int,
+        sampleSha256: String,
+    ): NvidiaSttTransportObservation {
+        if (httpStatus !in 200..299) {
+            val detail = runCatching {
+                JSONObject(body).optString("detail").ifBlank { body.take(300) }
+            }.getOrDefault(body.take(300))
+            error("NVIDIA HTTP $httpStatus: ${detail.ifBlank { "فشل الطلب" }}")
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return NvidiaSttTransportObservation(
+            requestProfile = NvidiaSttWireContract.PROFILE,
+            result = parseResponse(body, httpStatus),
+            parserVersion = NvidiaSttParserContract.ID,
+            rawResponseSha256 = NvidiaSttTimingEvidenceInspector.inspect(body).rawResponseSha256,
+            sampleSha256 = sampleSha256,
+        )
     }
+
+    private fun sha256Bytes(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+        .digest(bytes)
+        .joinToString("") { "%02x".format(it) }
 
     internal fun parseResponse(body: String, httpStatus: Int = 200): NvidiaSttResult {
         val root = JSONObject(body)

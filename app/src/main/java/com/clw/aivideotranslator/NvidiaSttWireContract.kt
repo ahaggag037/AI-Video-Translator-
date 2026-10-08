@@ -6,6 +6,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * Versioned, non-secret semantic identity of the hosted NVIDIA STT request.
@@ -76,12 +77,40 @@ internal object NvidiaSttWireContract {
             .build()
     }
 
+    /**
+     * Same multipart shape as the file-based overload, built from already-materialized sample bytes.
+     * The durable transport path uses this so the exact streamed bytes are known and hashable before
+     * the request can observe any mutation of the source path.
+     */
+    fun multipartBody(fileName: String, wavBytes: ByteArray): MultipartBody {
+        require(wavBytes.size > 44) { "ملف WAV غير صالح" }
+        return MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("language", PROFILE.language)
+            .addFormDataPart("word_time_offsets", PROFILE.wordTimeOffsets)
+            .addFormDataPart(
+                "file",
+                fileName,
+                wavBytes.toRequestBody(PROFILE.fileMediaType.toMediaType()),
+            )
+            .build()
+    }
+
     fun request(cleanApiKey: String, wavFile: File): Request {
         require(cleanApiKey.isNotBlank()) { "أدخل NVIDIA API Key أولًا" }
         return Request.Builder()
             .url(PROFILE.endpoint)
             .header("Authorization", "Bearer $cleanApiKey")
             .method(PROFILE.method, multipartBody(wavFile))
+            .build()
+    }
+
+    fun request(cleanApiKey: String, fileName: String, wavBytes: ByteArray): Request {
+        require(cleanApiKey.isNotBlank()) { "أدخل NVIDIA API Key أولًا" }
+        return Request.Builder()
+            .url(PROFILE.endpoint)
+            .header("Authorization", "Bearer $cleanApiKey")
+            .method(PROFILE.method, multipartBody(fileName, wavBytes))
             .build()
     }
 }

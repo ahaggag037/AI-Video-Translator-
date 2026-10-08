@@ -15,10 +15,12 @@ import java.security.MessageDigest
  * Pure fail-closed adapter from already-observed source/audio/STT evidence into durable semantic truth.
  * This does not perform I/O against the source URI, submit a provider request, choose a track/range,
  * or authorize timing. Legacy normalized word offsets are deliberately discarded while X001 is open.
- * STT provenance is consumed as ONE transport-bound observation (profile + accepted parse + raw
- * response SHA-256 + transported-sample digest bound at the response-handling point); the factory
- * never accepts independently supplied provenance parts and re-verifies the transported sample
- * digest against its own independent inspection of the prepared WAV bytes.
+ * STT provenance is consumed as ONE redacted transport-bound observation (profile + accepted result
+ * + parser identity + UTF-8 response digest + pre-send sample digest bound at the response-handling
+ * point); the factory never accepts independently supplied provenance parts. It re-inspects the
+ * prepared WAV itself and requires byte-identity with the observation's pre-send sample digest, so
+ * any replacement of the mutable prepared path after the transport anchor fails closed instead of
+ * laundering one sample's provenance into another sample's bytes.
  */
 internal object NvidiaSourceSnapshotFactory {
     fun buildUnverified(
@@ -30,8 +32,6 @@ internal object NvidiaSourceSnapshotFactory {
         require(requestProfile == NvidiaSttWireContract.PROFILE) {
             "unsupported STT request profile for current snapshot adapter"
         }
-        val parsed = observation.parsed
-        require(parsed.parserVersion.isNotBlank()) { "missing accepted STT parser identity" }
         requireTrackOwnership(attachment.audioTrack, preparation.provenance.inputTrack)
 
         val profile = preparation.profile
@@ -58,8 +58,10 @@ internal object NvidiaSourceSnapshotFactory {
         val expectedDurationMs = Math.multiplyExact(pcmSample.pcmFrameCount, 1_000L) / pcmSample.sampleRateHz
         require(profile.durationMs == expectedDurationMs) { "prepared sample duration does not match PCM frames" }
 
-        require(parsed.result.httpStatus in 200..299) { "accepted source snapshot requires successful STT HTTP status" }
-        val words = parsed.result.words.mapIndexed { ordinal, word ->
+        require(observation.result.httpStatus in 200..299) {
+            "accepted source snapshot requires successful STT HTTP status"
+        }
+        val words = observation.result.words.mapIndexed { ordinal, word ->
             // startMs/endMs intentionally do not cross this boundary until X001 verifies the clock map.
             SourceSnapshotWord(
                 ordinal = ordinal,
@@ -72,16 +74,16 @@ internal object NvidiaSourceSnapshotFactory {
         return SourceSnapshot(
             sessionId = attachment.sessionId,
             sourceAttachmentId = attachment.attachmentId,
-            transcript = parsed.result.transcript,
+            transcript = observation.result.transcript,
             words = words,
             pcmSample = pcmSample,
             stt = SourceSttProvenance(
                 providerId = requestProfile.providerId,
                 modelId = requestProfile.modelId,
                 requestProfileId = requestProfile.profileId,
-                parserVersion = parsed.parserVersion,
-                rawResponseSha256 = parsed.timingEvidence.rawResponseSha256,
-                httpStatus = parsed.result.httpStatus,
+                parserVersion = observation.parserVersion,
+                rawResponseSha256 = observation.rawResponseSha256,
+                httpStatus = observation.result.httpStatus,
             ),
             clock = SourceClockProvenance(
                 observedPresentationOriginUs = profile.sourceStartUs,
