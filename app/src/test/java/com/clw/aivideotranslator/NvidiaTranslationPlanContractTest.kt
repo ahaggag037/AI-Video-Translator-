@@ -27,6 +27,19 @@ class NvidiaTranslationPlanContractTest {
         NvidiaTranslationPlanContract.requireSupported(plan())
     }
 
+    @Test fun legacyAndDefaultPlanSerializeEquivalentRequest() {
+        val plan = plan()
+        assertEquals(
+            JSONObject(NvidiaTranslationClient.requestBody("Hello world.")).toString(),
+            JSONObject(NvidiaTranslationClient.requestBody(plan)).toString(),
+        )
+        assertEquals("POST", NvidiaTranslationWireContract.METHOD)
+        assertEquals("application/json", NvidiaTranslationWireContract.ACCEPT_MEDIA_TYPE)
+        assertEquals("application/json; charset=utf-8", NvidiaTranslationWireContract.REQUEST_MEDIA_TYPE)
+        assertFalse(NvidiaTranslationWireContract.FOLLOW_REDIRECTS)
+        assertFalse(NvidiaTranslationWireContract.RETRY_ON_CONNECTION_FAILURE)
+    }
+
     @Test fun requestSignatureContractMatchesSerializedNvidiaBody() {
         val plan = plan()
         NvidiaTranslationPlanContract.requireSupported(plan)
