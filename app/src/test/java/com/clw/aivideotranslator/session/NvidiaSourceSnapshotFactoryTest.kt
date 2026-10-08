@@ -4,6 +4,7 @@ import com.clw.aivideotranslator.DetailedSttAudioPreparation
 import com.clw.aivideotranslator.NvidiaSttDetailedEvidenceParser
 import com.clw.aivideotranslator.NvidiaSttParserContract
 import com.clw.aivideotranslator.NvidiaSttRequestProfile
+import com.clw.aivideotranslator.NvidiaSttTransportObservation
 import com.clw.aivideotranslator.NvidiaSttWireContract
 import com.clw.aivideotranslator.SttAudioPreparationProvenance
 import com.clw.aivideotranslator.SttAudioProfile
@@ -14,6 +15,7 @@ import com.clw.aivideotranslator.semantic.PresentationTimeUs
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -67,16 +69,40 @@ class NvidiaSourceSnapshotFactoryTest {
         provenance = SttAudioPreparationProvenance(track, frameCount),
     )
 
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                if (read == 0) continue
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** Fake transport: binds parts exactly the way the real response handler does. */
+    private fun observation(
+        wav: File,
+        status: Int = 200,
+        requestProfile: NvidiaSttRequestProfile = NvidiaSttWireContract.PROFILE,
+        sampleSha256: String = sha256(wav),
+    ) = NvidiaSttTransportObservation(
+        requestProfile = requestProfile,
+        parsed = detailedParse(status),
+        sampleSha256 = sampleSha256,
+    )
+
     private fun build(
         source: SourceAttachment,
         preparation: DetailedSttAudioPreparation,
-        requestProfile: NvidiaSttRequestProfile = NvidiaSttWireContract.PROFILE,
-        status: Int = 200,
+        observation: NvidiaSttTransportObservation,
     ) = NvidiaSourceSnapshotFactory.buildUnverified(
         attachment = source,
         preparation = preparation,
-        parsed = detailedParse(status),
-        requestProfile = requestProfile,
+        observation = observation,
     )
 
     private fun rejected(block: () -> Unit) {
@@ -88,21 +114,16 @@ class NvidiaSourceSnapshotFactoryTest {
         }
     }
 
-    @Test fun unverifiedSnapshotBindsExactEvidenceAndDropsLegacyNormalizedOffsets() {
+    @Test fun unverifiedSnapshotBindsExactTransportEvidenceAndDropsLegacyNormalizedOffsets() {
         val wav = createPcmWav(sampleRate = 16_000, channels = 1, bits = 16, frames = 16_000)
         try {
-            val parsed = detailedParse()
-            assertEquals(100L, parsed.result.words.first().startMs)
-            assertEquals(800L, parsed.result.words.last().endMs)
-            assertEquals(NvidiaSttParserContract.ID, parsed.parserVersion)
+            val observed = observation(wav)
+            assertEquals(100L, observed.parsed.result.words.first().startMs)
+            assertEquals(800L, observed.parsed.result.words.last().endMs)
+            assertEquals(NvidiaSttParserContract.ID, observed.parserVersion)
 
             val source = attachment()
-            val snapshot = NvidiaSourceSnapshotFactory.buildUnverified(
-                source,
-                preparation(wav),
-                parsed,
-                NvidiaSttWireContract.PROFILE,
-            )
+            val snapshot = build(source, preparation(wav), observed)
 
             assertEquals(source.sessionId, snapshot.sessionId)
             assertEquals(source.attachmentId, snapshot.sourceAttachmentId)
@@ -116,12 +137,13 @@ class NvidiaSourceSnapshotFactoryTest {
             assertEquals(1, snapshot.pcmSample.channelCount)
             assertEquals(16, snapshot.pcmSample.bitsPerSample)
             assertEquals(wav.length(), snapshot.pcmSample.wavSizeBytes)
+            assertEquals(sha256(wav), snapshot.pcmSample.wavSha256)
             assertEquals(1_000_000L, snapshot.pcmSample.derivedPcmDurationUs)
             assertEquals(NvidiaSttWireContract.PROFILE.providerId, snapshot.stt.providerId)
             assertEquals(NvidiaSttWireContract.PROFILE.modelId, snapshot.stt.modelId)
             assertEquals(NvidiaSttWireContract.PROFILE.profileId, snapshot.stt.requestProfileId)
-            assertEquals(parsed.parserVersion, snapshot.stt.parserVersion)
-            assertEquals(parsed.timingEvidence.rawResponseSha256, snapshot.stt.rawResponseSha256)
+            assertEquals(observed.parserVersion, snapshot.stt.parserVersion)
+            assertEquals(observed.rawResponseSha256, snapshot.stt.rawResponseSha256)
             assertEquals(200, snapshot.stt.httpStatus)
             assertNull(snapshot.clock.precisionUs)
             assertNull(snapshot.clock.evidenceProfile)
@@ -130,13 +152,32 @@ class NvidiaSourceSnapshotFactoryTest {
         }
     }
 
-    @Test fun requestProfileMustBeExplicitAndSupportedRatherThanInventedByFactory() {
+    @Test fun responseObservedUnderNonCurrentProfileCannotMintDurableSnapshot() {
         val wav = createPcmWav(16_000, 1, 16, 16_000)
         try {
-            val unsupported = NvidiaSttWireContract.PROFILE.copy(language = "en-GB")
-            rejected { build(attachment(), preparation(wav), requestProfile = unsupported) }
+            val foreignProfile = NvidiaSttWireContract.PROFILE.copy(language = "en-GB")
+            rejected { build(attachment(), preparation(wav), observation(wav, requestProfile = foreignProfile)) }
         } finally {
             wav.delete()
+        }
+    }
+
+    @Test fun responseForOneSampleCannotBePairedWithAnotherSamplesProvenance() {
+        val wavA = createPcmWav(16_000, 1, 16, 16_000)
+        val wavB = createPcmWav(16_000, 1, 16, 8_000)
+        try {
+            // Observation truthfully bound to sample B must not mint a snapshot over preparation A.
+            val observationOfB = observation(wavB, sampleSha256 = sha256(wavB))
+            rejected { build(attachment(), preparation(wavA), observationOfB) }
+
+            // A caller asserting A's bytes while carrying B's actual digest must also fail closed.
+            rejected { build(attachment(), preparation(wavB), observationOfB) }
+
+            // Garbage digests never pass the content binding either.
+            rejected { build(attachment(), preparation(wavA), observation(wavA, sampleSha256 = "d".repeat(64))) }
+        } finally {
+            wavA.delete()
+            wavB.delete()
         }
     }
 
@@ -151,7 +192,7 @@ class NvidiaSourceSnapshotFactoryTest {
                 SttInputAudioTrack(2, "audio/mp4a-latm", "en", 44_100, 2),
                 SttInputAudioTrack(2, "audio/mp4a-latm", "en", 48_000, 1),
             ).forEach { observed ->
-                rejected { build(source, preparation(wav, track = observed)) }
+                rejected { build(source, preparation(wav, track = observed), observation(wav)) }
             }
         } finally {
             wav.delete()
@@ -166,7 +207,7 @@ class NvidiaSourceSnapshotFactoryTest {
                 sampleRateHz = null,
                 channelCount = null,
             ))
-            val snapshot = build(source, preparation(wav))
+            val snapshot = build(source, preparation(wav), observation(wav))
             assertEquals(source.attachmentId, snapshot.sourceAttachmentId)
         } finally {
             wav.delete()
@@ -176,12 +217,12 @@ class NvidiaSourceSnapshotFactoryTest {
     @Test fun wavHeaderFrameCountAndProfileArithmeticMustAllDescribeTheSameBytes() {
         val wav = createPcmWav(16_000, 1, 16, 16_000)
         try {
-            rejected { build(attachment(), preparation(wav, frameCount = 15_999)) }
+            rejected { build(attachment(), preparation(wav, frameCount = 15_999), observation(wav)) }
 
             val bytes = wav.readBytes()
             bytes[8] = 'X'.code.toByte()
             wav.writeBytes(bytes)
-            rejected { build(attachment(), preparation(wav)) }
+            rejected { build(attachment(), preparation(wav), observation(wav)) }
         } finally {
             wav.delete()
         }
@@ -190,7 +231,7 @@ class NvidiaSourceSnapshotFactoryTest {
     @Test fun onlySuccessfulAcceptedSttCanBecomeDurableSourceSnapshot() {
         val wav = createPcmWav(16_000, 1, 16, 16_000)
         try {
-            rejected { build(attachment(), preparation(wav), status = 500) }
+            rejected { build(attachment(), preparation(wav), observation(wav, status = 500)) }
         } finally {
             wav.delete()
         }
@@ -202,7 +243,7 @@ class NvidiaSourceSnapshotFactoryTest {
             val outsideSelectedRange = attachment().copy(
                 selectedRange = PresentationIntervalUs(PresentationTimeUs(2_000_000), PresentationTimeUs(4_000_000))
             )
-            val snapshot = build(outsideSelectedRange, preparation(wav))
+            val snapshot = build(outsideSelectedRange, preparation(wav), observation(wav))
             assertEquals(500_000L, snapshot.clock.observedPresentationOriginUs)
 
             val basePreparation = preparation(wav)
@@ -210,7 +251,7 @@ class NvidiaSourceSnapshotFactoryTest {
                 sourceStartUs = 10_000_000,
                 sourceEndUs = 11_000_000,
             ))
-            rejected { build(attachment(), invalidOrigin) }
+            rejected { build(attachment(), invalidOrigin, observation(wav)) }
         } finally {
             wav.delete()
         }
