@@ -1,5 +1,6 @@
 package com.clw.aivideotranslator
 
+import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -21,6 +22,7 @@ internal enum class NvidiaRawJsonValueType {
 
 internal data class NvidiaRawTimingValueEvidence(
     val jsonType: NvidiaRawJsonValueType,
+    /** Parser-rendered scalar view. Exact source lexeme remains in NvidiaSttTimingEvidence.rawResponseUtf8. */
     val rawText: String,
     val parsedNumber: Double?,
 )
@@ -40,6 +42,13 @@ internal data class NvidiaWordTimingSourceEvidence(
 )
 
 internal data class NvidiaSttTimingEvidence(
+    /**
+     * Verbatim provider response supplied to the inspector. Diagnostic-only: callers must not log,
+     * relay, or persist this unredacted because it may contain transcript/private media content.
+     * Keeping it here prevents JSON parsing from irreversibly normalizing numeric lexemes.
+     */
+    val rawResponseUtf8: String,
+    val rawResponseSha256: String,
     val sources: List<NvidiaWordTimingSourceEvidence>,
 ) {
     val presentSchemas: Set<NvidiaWordTimingSchema> = sources.map { it.schema }.toSet()
@@ -50,9 +59,10 @@ internal data class NvidiaSttTimingEvidence(
  * X001 diagnostic-only adapter.
  *
  * This deliberately preserves raw schema/field provenance without selecting a timing unit,
- * authoritative word schema, or changing NvidiaSttClient.normalizeTimes(). Raw scalar type/text
- * is retained alongside an optional numeric parse so evidence capture does not silently erase a
- * present but non-numeric field. The production parser remains intentionally separate.
+ * authoritative word schema, or changing NvidiaSttClient.normalizeTimes(). Parsed scalar type/text
+ * is retained alongside an optional numeric parse, while the verbatim response remains available
+ * as the source of truth for exact JSON lexemes. The production parser remains intentionally
+ * separate.
  */
 internal object NvidiaSttTimingEvidenceInspector {
     fun inspect(body: String): NvidiaSttTimingEvidence {
@@ -92,7 +102,11 @@ internal object NvidiaSttTimingEvidenceInspector {
             )
         }
 
-        return NvidiaSttTimingEvidence(sources = sources)
+        return NvidiaSttTimingEvidence(
+            rawResponseUtf8 = body,
+            rawResponseSha256 = sha256Utf8(body),
+            sources = sources,
+        )
     }
 
     private fun sourceEvidence(
@@ -167,4 +181,8 @@ internal object NvidiaSttTimingEvidenceInspector {
         if (!has(name) || isNull(name)) return null
         return (opt(name) as? String)?.takeIf { it.isNotBlank() }
     }
+
+    private fun sha256Utf8(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
 }

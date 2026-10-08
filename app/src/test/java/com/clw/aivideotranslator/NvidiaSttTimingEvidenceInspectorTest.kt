@@ -1,5 +1,6 @@
 package com.clw.aivideotranslator
 
+import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -60,6 +61,17 @@ class NvidiaSttTimingEvidenceInspectorTest {
         assertEquals(NvidiaRawJsonValueType.NULL, explicitNull.jsonType)
         assertEquals("null", explicitNull.rawText)
         assertNull(explicitNull.parsedNumber)
+    }
+
+    @Test fun verbatimResponsePreservesNumericLexemeThatJsonParserMayNormalize() {
+        val body = """{"words":[{"word":"hello","start":1.2500,"end":2.5000}]}"""
+        val evidence = NvidiaSttTimingEvidenceInspector.inspect(body)
+
+        assertEquals(body, evidence.rawResponseUtf8)
+        assertTrue(evidence.rawResponseUtf8.contains("\"start\":1.2500"))
+        assertTrue(evidence.rawResponseUtf8.contains("\"end\":2.5000"))
+        assertEquals(sha256Utf8(body), evidence.rawResponseSha256)
+        assertEquals(1.25, evidence.sources.single().words.single().startFields.getValue("start").parsedNumber!!, 0.0)
     }
 
     @Test fun multipleWordSchemasDoNotSilentlyMerge() {
@@ -155,4 +167,8 @@ class NvidiaSttTimingEvidenceInspectorTest {
         assertEquals("3.5", start.rawText)
         assertEquals(3.5, start.parsedNumber!!, 0.0)
     }
+
+    private fun sha256Utf8(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
 }
