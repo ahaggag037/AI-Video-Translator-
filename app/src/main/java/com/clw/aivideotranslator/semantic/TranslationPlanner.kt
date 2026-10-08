@@ -7,6 +7,7 @@ data class TranslationProfile(
     val id: String = "nvidia-text-v1",
     val providerId: String = "nvidia",
     val model: String = "nvidia/riva-translate-4b-instruct-v2",
+    val endpoint: String = "https://integrate.api.nvidia.com/v1/chat/completions",
     val systemContent: String = "en-ar",
     val sourceLanguage: String = "en",
     val targetLanguage: String = "ar",
@@ -73,6 +74,7 @@ object TranslationPlanner {
         add(profile.id)
         add(profile.providerId)
         add(profile.model)
+        add(profile.endpoint)
         add(profile.systemContent)
         add(profile.sourceLanguage)
         add(profile.targetLanguage)

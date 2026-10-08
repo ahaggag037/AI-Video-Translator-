@@ -11,6 +11,7 @@ internal object NvidiaTranslationPlanContract {
         require(profile.id == "nvidia-text-v1") { "unsupported translation profile id" }
         require(profile.providerId == "nvidia") { "unsupported translation provider" }
         require(profile.model == NvidiaTranslationClient.MODEL_ID) { "translation model does not match NVIDIA request body" }
+        require(profile.endpoint == NvidiaTranslationClient.ENDPOINT) { "translation endpoint does not match NVIDIA transport contract" }
         require(profile.systemContent == "en-ar") { "translation system contract does not match NVIDIA request body" }
         require(profile.sourceLanguage == "en" && profile.targetLanguage == "ar") { "unsupported language pair" }
         require(profile.maxTokens == 1024) { "max token contract does not match NVIDIA request body" }

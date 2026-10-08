@@ -4,6 +4,8 @@ import com.clw.aivideotranslator.provider.ProtocolOutcome
 import com.clw.aivideotranslator.provider.TranslationProviderOutcome
 import com.clw.aivideotranslator.provider.TranslationResponseClassifier
 import com.clw.aivideotranslator.provider.TransportOutcome
+import com.clw.aivideotranslator.semantic.TranslationProfile
+import com.clw.aivideotranslator.semantic.TranslationRequestPlan
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -31,16 +33,22 @@ object NvidiaTranslationClient {
         .build()
 
     // IDs and times never cross this interface. One request owns exactly one text result.
-    internal fun requestBody(sourceText: String): String {
+    internal fun requestBody(sourceText: String): String =
+        requestBody(TranslationProfile(), sourceText)
+
+    internal fun requestBody(plan: TranslationRequestPlan): String =
+        requestBody(plan.profile, plan.exactSourceText)
+
+    private fun requestBody(profile: TranslationProfile, sourceText: String): String {
         require(sourceText.isNotBlank() && sourceText.length <= 1_000) { "نص الوحدة غير صالح" }
         return JSONObject()
-            .put("model", MODEL_ID)
+            .put("model", profile.model)
             .put("messages", JSONArray()
-                .put(JSONObject().put("role", "system").put("content", "en-ar"))
+                .put(JSONObject().put("role", "system").put("content", profile.systemContent))
                 .put(JSONObject().put("role", "user").put("content", sourceText)))
-            .put("temperature", 0)
-            .put("max_tokens", 1024)
-            .put("stream", false)
+            .put("temperature", profile.temperature)
+            .put("max_tokens", profile.maxTokens)
+            .put("stream", profile.stream)
             .toString()
     }
 
@@ -52,12 +60,24 @@ object NvidiaTranslationClient {
      * callback alone cannot prove the request body never reached the provider. This prevents
      * callers from blindly re-posting a request that may already have executed remotely.
      */
-    suspend fun translateDetailed(apiKey: String, sourceText: String): TranslationProviderOutcome {
+    suspend fun translateDetailed(apiKey: String, sourceText: String): TranslationProviderOutcome =
+        executeDetailed(apiKey, ENDPOINT, requestBody(sourceText))
+
+    suspend fun translateDetailed(apiKey: String, plan: TranslationRequestPlan): TranslationProviderOutcome {
+        NvidiaTranslationPlanContract.requireSupported(plan)
+        return executeDetailed(apiKey, plan.profile.endpoint, requestBody(plan))
+    }
+
+    private suspend fun executeDetailed(
+        apiKey: String,
+        endpoint: String,
+        body: String,
+    ): TranslationProviderOutcome {
         require(apiKey.trim().isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
-        val request = Request.Builder().url(ENDPOINT)
+        val request = Request.Builder().url(endpoint)
             .header("Authorization", "Bearer ${apiKey.trim()}")
             .header("Accept", "application/json")
-            .post(requestBody(sourceText).toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
         return suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
@@ -75,11 +95,11 @@ object NvidiaTranslationClient {
                     val outcome = try {
                         response.use {
                             val retryAfterMs = parseRetryAfterMs(it.header("Retry-After"))
-                            val body = it.body
-                            if (body.contentLength() > TranslationResponseClassifier.MAX_BODY_BYTES) {
+                            val responseBody = it.body
+                            if (responseBody.contentLength() > TranslationResponseClassifier.MAX_BODY_BYTES) {
                                 oversizedResponse(it.code, retryAfterMs)
                             } else {
-                                val source = body.source()
+                                val source = responseBody.source()
                                 source.request((TranslationResponseClassifier.MAX_BODY_BYTES + 1).toLong())
                                 if (source.buffer.size > TranslationResponseClassifier.MAX_BODY_BYTES) {
                                     oversizedResponse(it.code, retryAfterMs)

@@ -15,7 +15,7 @@ object DurableNvidiaTranslationAttempt {
         require(apiKey.trim().isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
         NvidiaTranslationPlanContract.requireSupported(requestPlan)
         return DurableTranslationAttemptExecutor(store).execute(prepared, requestPlan) { plan ->
-            NvidiaTranslationClient.translateDetailed(apiKey, plan.exactSourceText)
+            NvidiaTranslationClient.translateDetailed(apiKey, plan)
         }
     }
 }
