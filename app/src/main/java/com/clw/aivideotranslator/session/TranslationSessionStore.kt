@@ -19,6 +19,8 @@ fun interface SessionStoreFaultInjector {
 
     fun afterSourceAttachmentPublished(sessionId: String, attachmentId: String) = Unit
 
+    fun afterSourceSnapshotPublished(sessionId: String, snapshotId: String) = Unit
+
     companion object {
         val NONE = SessionStoreFaultInjector { _, _, _ -> }
     }
@@ -81,24 +83,79 @@ class TranslationSessionStore(
         readSourceAttachmentUnlocked(sessionId, ref)
     }
 
+    /**
+     * Publish the accepted STT/source-text snapshot only after a durable attachment exists.
+     * This remains additive and unwired: an UNVERIFIED clock snapshot is durable semantic evidence,
+     * not permission to reinterpret provider units or render against a guessed clock.
+     */
+    fun bindInitialSourceSnapshot(
+        sessionId: String,
+        expectedRevision: Long,
+        snapshot: SourceSnapshot,
+    ): SessionManifest = synchronized(writerLock) {
+        val current = readManifestUnlocked(sessionId)
+        check(current.revision == expectedRevision) { "stale session revision" }
+        require(snapshot.sessionId == sessionId) { "snapshot session mismatch" }
+        check(current.sourceBindingState == SourceBindingState.ATTACHMENT_BOUND &&
+            current.activeSourceSnapshotRef == null && current.activeEntryRefs.isEmpty()) {
+            "initial source snapshot binding requires attachment-bound empty session"
+        }
+        val attachmentRef = requireNotNull(current.activeSourceAttachmentRef) { "source attachment missing" }
+        require(snapshot.sourceAttachmentId == attachmentRef) { "snapshot source attachment mismatch" }
+        readSourceAttachmentUnlocked(sessionId, attachmentRef)
+        writeImmutableSourceSnapshotUnlocked(snapshot)
+        faultInjector.afterSourceSnapshotPublished(sessionId, snapshot.snapshotId)
+        val next = current.copy(
+            revision = Math.addExact(current.revision, 1L),
+            epoch = Math.addExact(current.epoch, 1L),
+            sourceBindingState = SourceBindingState.SNAPSHOT_BOUND,
+            activeSourceSnapshotRef = snapshot.snapshotId,
+        )
+        writeManifestUnlocked(next)
+        next
+    }
+
+    fun readActiveSourceSnapshot(sessionId: String): SourceSnapshot? = synchronized(writerLock) {
+        val manifest = readManifestUnlocked(sessionId)
+        val ref = manifest.activeSourceSnapshotRef ?: return@synchronized null
+        val snapshot = readSourceSnapshotUnlocked(sessionId, ref)
+        require(snapshot.sourceAttachmentId == manifest.activeSourceAttachmentRef) { "source snapshot binding mismatch" }
+        snapshot
+    }
+
     private fun readSourceAttachmentUnlocked(sessionId: String, ref: String): SourceAttachment {
         require(isSafeId(sessionId) && isSafeId(ref)) { "invalid source attachment path" }
         val file = File(sessionDir(sessionId), "sources/$ref.json")
-        val json = file.inputStream().use { input ->
-            // Bound the allocation before parsing, including a corrupt/oversized private file.
-            val output = java.io.ByteArrayOutputStream()
-            val buffer = ByteArray(4_096)
-            while (true) {
-                val count = input.read(buffer, 0, minOf(buffer.size, SourceAttachmentCodec.MAX_BYTES + 1 - output.size()))
-                if (count == -1) break
-                output.write(buffer, 0, count)
-                require(output.size() <= SourceAttachmentCodec.MAX_BYTES) { "source attachment too large" }
-            }
-            output.toByteArray().toString(Charsets.UTF_8)
-        }
+        val json = readBoundedUtf8(file, SourceAttachmentCodec.MAX_BYTES, "source attachment too large")
         return SourceAttachmentCodec.decode(json).also {
             require(it.sessionId == sessionId && it.attachmentId == ref) { "source attachment identity mismatch" }
         }
+    }
+
+    private fun readSourceSnapshotUnlocked(sessionId: String, ref: String): SourceSnapshot {
+        require(isSafeId(sessionId) && isSafeId(ref)) { "invalid source snapshot path" }
+        val file = File(sessionDir(sessionId), "snapshots/$ref.json")
+        val json = readBoundedUtf8(file, SourceSnapshotCodec.MAX_BYTES, "source snapshot too large")
+        return SourceSnapshotCodec.decode(json).also {
+            require(it.sessionId == sessionId && it.snapshotId == ref) { "source snapshot identity mismatch" }
+        }
+    }
+
+    private fun readBoundedUtf8(file: File, maxBytes: Int, errorMessage: String): String {
+        val json = file.inputStream().use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(4_096)
+            while (true) {
+                val remaining = maxBytes + 1 - output.size()
+                require(remaining > 0) { errorMessage }
+                val count = input.read(buffer, 0, minOf(buffer.size, remaining))
+                if (count == -1) break
+                output.write(buffer, 0, count)
+                require(output.size() <= maxBytes) { errorMessage }
+            }
+            output.toByteArray().toString(Charsets.UTF_8)
+        }
+        return json
     }
 
     private fun writeImmutableSourceAttachmentUnlocked(attachment: SourceAttachment) {
@@ -113,10 +170,35 @@ class TranslationSessionStore(
             return
         }
         val bytes = SourceAttachmentCodec.encode(attachment).toByteArray(Charsets.UTF_8)
-        val temp = File(directory, ".${attachment.attachmentId}.${UUID.randomUUID()}.tmp")
+        publishImmutableFile(directory, destination, attachment.attachmentId, bytes, "cannot publish source attachment")
+    }
+
+    private fun writeImmutableSourceSnapshotUnlocked(snapshot: SourceSnapshot) {
+        val directory = File(sessionDir(snapshot.sessionId), "snapshots").apply {
+            require(mkdirs() || isDirectory) { "cannot create source snapshot directory" }
+        }
+        val destination = File(directory, "${snapshot.snapshotId}.json")
+        if (destination.exists()) {
+            require(readSourceSnapshotUnlocked(snapshot.sessionId, snapshot.snapshotId) == snapshot) {
+                "immutable source snapshot collision"
+            }
+            return
+        }
+        val bytes = SourceSnapshotCodec.encode(snapshot).toByteArray(Charsets.UTF_8)
+        publishImmutableFile(directory, destination, snapshot.snapshotId, bytes, "cannot publish source snapshot")
+    }
+
+    private fun publishImmutableFile(
+        directory: File,
+        destination: File,
+        identity: String,
+        bytes: ByteArray,
+        errorMessage: String,
+    ) {
+        val temp = File(directory, ".$identity.${UUID.randomUUID()}.tmp")
         try {
             FileOutputStream(temp).use { output -> output.write(bytes); output.fd.sync() }
-            check(temp.renameTo(destination)) { "cannot publish source attachment" }
+            check(temp.renameTo(destination)) { errorMessage }
         } finally {
             if (temp.exists()) temp.delete()
         }
@@ -177,8 +259,6 @@ class TranslationSessionStore(
             record = merged,
         )
 
-        // Publish immutable history first. If the process dies before manifest publication,
-        // the same frozen receipt deterministically reproduces the same immutable bytes and IDs.
         writeImmutableEntryUnlocked(sessionId, receipt.unitId, entry)
         faultInjector.afterRecoveryEntryPublished(sessionId, receipt.unitId, entry.revisionId)
         val nextManifest = currentManifest.copy(
@@ -225,7 +305,7 @@ class TranslationSessionStore(
                 require(existing?.phase == RequestReceiptPhase.PREPARED) { "SENT must advance a durable PREPARED receipt" }
                 requireCurrentReceiptFence(receipt, manifest, "send")
             }
-            RequestReceiptPhase.RECEIVED -> Unit // late/stale responses remain durable audit evidence
+            RequestReceiptPhase.RECEIVED -> Unit
         }
 
         writeAtomicTextUnlocked(file, SessionCodec.encodeReceipt(receipt))
@@ -357,4 +437,3 @@ class TranslationSessionStore(
 
     private fun sessionDir(sessionId: String): File = File(sessionsRoot, sessionId)
 }
-
