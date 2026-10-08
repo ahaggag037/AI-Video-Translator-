@@ -1,0 +1,71 @@
+name: X003 Native Layout Controls
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ 'build/p0g-gpt6-cleanroom-v1' ]
+    paths:
+      - 'app/src/main/java/com/clw/aivideotranslator/subtitle/android/**'
+      - 'app/src/main/java/com/clw/aivideotranslator/semantic/Text*.kt'
+      - 'app/src/main/res/font/**'
+      - 'app/src/main/assets/licenses/**'
+      - 'app/src/androidTest/java/com/clw/aivideotranslator/subtitle/**'
+      - 'app/build.gradle.kts'
+      - '.github/workflows/x003-native-layout.yml'
+      - 'scripts/run_x003_native_controls.sh'
+
+jobs:
+  layout-instrumented:
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [29, 35]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Install compile SDK
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run X003 partial native layout controls
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: default
+          arch: x86_64
+          profile: pixel_7_pro
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash scripts/run_x003_native_controls.sh
+
+      - name: Upload X003 partial native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x003-native-layout-api${{ matrix.api-level }}
+          path: |
+            app/build/x003-evidence/
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/connected/
+          if-no-files-found: warn
+

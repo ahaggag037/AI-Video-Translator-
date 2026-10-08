@@ -39,6 +39,9 @@ data class SubtitleLayoutDescriptor(
         require(text.isNotBlank())
         require(fontPx > 0)
         require(lineRanges.size in 1..2)
+        require(SubtitleLineCoverage.coversExactly(text.length, lineRanges)) {
+            "accepted line ranges must cover semantic text exactly once in order"
+        }
         require(fontAssetHash.isNotBlank())
         require(rendererEnvironment.isNotBlank())
         require(safeRect.contains(inkBounds) && safeRect.contains(boxBounds)) {
@@ -59,3 +62,4 @@ sealed interface SubtitleLayoutResult {
         override val status = SubtitleLayoutStatus.REVIEW_REQUIRED
     }
 }
+

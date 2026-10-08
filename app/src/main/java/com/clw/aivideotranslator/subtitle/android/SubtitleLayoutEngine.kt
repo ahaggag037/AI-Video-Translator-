@@ -20,12 +20,12 @@ class SubtitleLayoutEngine(
     fun layout(
         rawText: String,
         geometry: FrameGeometry,
-        typeface: Typeface,
-        fontProfile: SubtitleFontProfile,
+        font: LoadedSubtitleFont,
         rendererEnvironment: String,
     ): SubtitleLayoutResult {
         if (rendererEnvironment.isBlank()) return SubtitleLayoutResult.ReviewRequired("MISSING_RENDERER_ENVIRONMENT")
-        SubtitleFonts.requirePinned(fontProfile)
+        val fontProfile = font.profile
+        val typeface = font.typeface
 
         val canonical = runCatching { TextPolicy.canonicalView(rawText) }.getOrElse {
             return SubtitleLayoutResult.ReviewRequired("INVALID_TEXT")
@@ -35,6 +35,7 @@ class SubtitleLayoutEngine(
         }
         val text = canonical.displayCanonical
         if (text.isBlank()) return SubtitleLayoutResult.ReviewRequired("EMPTY_TEXT")
+        if (!font.supports(text)) return SubtitleLayoutResult.ReviewRequired("BUNDLED_FONT_GLYPH_UNSUPPORTED")
 
         val safe = runCatching { SubtitleDefaults.safeRect(geometry, config) }.getOrElse {
             return SubtitleLayoutResult.ReviewRequired("INVALID_FRAME_GEOMETRY")
@@ -70,6 +71,10 @@ class SubtitleLayoutEngine(
                 val semanticRanges = semanticLineRanges(native, text, forcedBreak)
                     ?: return@forEach
                 if (semanticRanges.size != native.lineCount) return@forEach
+                // StaticLayout may emergency-wrap a long token even with hyphenation disabled.
+                // Native wrapping must satisfy the SAME protected-span/grapheme policy as forced
+                // candidates; fitting geometry alone must not authorize an illegal break.
+                if (!SubtitleLineCoverage.usesLegalBreaks(text.length, semanticRanges, boundaries)) return@forEach
 
                 val inkMeasurement = inkBoundsProvider.measure(native, config.guardPx)
                 val ink = inkMeasurement.bounds
@@ -183,3 +188,4 @@ class SubtitleLayoutEngine(
         return !hasArabic && (text.contains("://") || text.contains('@') || text.startsWith('`'))
     }
 }
+
