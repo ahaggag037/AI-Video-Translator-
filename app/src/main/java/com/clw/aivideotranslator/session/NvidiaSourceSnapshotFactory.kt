@@ -2,7 +2,7 @@ package com.clw.aivideotranslator.session
 
 import com.clw.aivideotranslator.DetailedSttAudioPreparation
 import com.clw.aivideotranslator.NvidiaSttDetailedParse
-import com.clw.aivideotranslator.NvidiaSttParserContract
+import com.clw.aivideotranslator.NvidiaSttRequestProfile
 import com.clw.aivideotranslator.NvidiaSttWireContract
 import com.clw.aivideotranslator.SttInputAudioTrack
 import com.clw.aivideotranslator.semantic.ClockVerificationStatus
@@ -16,13 +16,19 @@ import java.security.MessageDigest
  * Pure fail-closed adapter from already-observed source/audio/STT evidence into durable semantic truth.
  * This does not perform I/O against the source URI, submit a provider request, choose a track/range,
  * or authorize timing. Legacy normalized word offsets are deliberately discarded while X001 is open.
+ * The request profile is explicit evidence supplied by the caller; this factory never invents it.
  */
 internal object NvidiaSourceSnapshotFactory {
     fun buildUnverified(
         attachment: SourceAttachment,
         preparation: DetailedSttAudioPreparation,
         parsed: NvidiaSttDetailedParse,
+        requestProfile: NvidiaSttRequestProfile,
     ): SourceSnapshot {
+        require(requestProfile == NvidiaSttWireContract.PROFILE) {
+            "unsupported STT request profile for current snapshot adapter"
+        }
+        require(parsed.parserVersion.isNotBlank()) { "missing accepted STT parser identity" }
         requireTrackOwnership(attachment.audioTrack, preparation.provenance.inputTrack)
 
         val profile = preparation.profile
@@ -57,7 +63,6 @@ internal object NvidiaSourceSnapshotFactory {
             )
         }
 
-        val requestProfile = NvidiaSttWireContract.PROFILE
         return SourceSnapshot(
             sessionId = attachment.sessionId,
             sourceAttachmentId = attachment.attachmentId,
@@ -68,7 +73,7 @@ internal object NvidiaSourceSnapshotFactory {
                 providerId = requestProfile.providerId,
                 modelId = requestProfile.modelId,
                 requestProfileId = requestProfile.profileId,
-                parserVersion = NvidiaSttParserContract.ID,
+                parserVersion = parsed.parserVersion,
                 rawResponseSha256 = parsed.timingEvidence.rawResponseSha256,
                 httpStatus = parsed.result.httpStatus,
             ),
