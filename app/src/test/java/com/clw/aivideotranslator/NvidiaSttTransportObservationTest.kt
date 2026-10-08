@@ -7,7 +7,6 @@ import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 class NvidiaSttTransportObservationTest {
@@ -30,7 +29,7 @@ class NvidiaSttTransportObservationTest {
     private fun expectFailure(block: () -> Unit): Exception {
         try {
             block()
-            fail("must fail")
+            throw AssertionError("must fail")
         } catch (error: Exception) {
             return error
         }
@@ -123,3 +122,4 @@ class NvidiaSttTransportObservationTest {
         return buffer.readUtf8().replace(boundary, "<BOUNDARY>")
     }
 }
+
