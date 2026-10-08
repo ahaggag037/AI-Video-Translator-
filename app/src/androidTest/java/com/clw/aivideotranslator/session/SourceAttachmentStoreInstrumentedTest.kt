@@ -123,7 +123,7 @@ class SourceAttachmentStoreInstrumentedTest {
     @Test fun legacyAndManualHistoryCannotBeSilentlyAttachedToNewSource() = withRoot { root ->
         val store = TranslationSessionStore(root)
         store.createSession("session-1")
-        val entry = StoredTranslationEntry("entry-1", TranslationRecord("u1",
+        val entry = StoredTranslationEntry(revisionId = "entry-1", record = TranslationRecord("u1",
             listOf(MachineTranslationRevision("m1", "آلة", "sig")), "m1",
             ManualTranslationRevision("manual-1", "تصحيح يدوي", "old-source", "m1"), TranslationReviewState.APPROVED))
         store.commitEntry("session-1", 0, entry)
