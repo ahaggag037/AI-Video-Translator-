@@ -51,10 +51,12 @@ class DurableTranslationAttemptExecutorTest {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
         var submitCount = 0
-        val executor = DurableTranslationAttemptExecutor.forTesting { receipt: RequestReceipt ->
-            persisted += receipt.phase
-            receipt
-        }
+        val executor = DurableTranslationAttemptExecutor.forTesting(
+            persistReceipt = { receipt: RequestReceipt ->
+                persisted += receipt.phase
+                receipt
+            },
+        )
 
         val received = executor.execute(prepared, plan) {
             submitCount += 1
@@ -73,10 +75,12 @@ class DurableTranslationAttemptExecutorTest {
     @Test fun sentPersistenceFailurePreventsTransportInvocation() = runBlocking {
         val (plan, prepared) = prepared()
         var submitCalled = false
-        val executor = DurableTranslationAttemptExecutor.forTesting { receipt: RequestReceipt ->
-            if (receipt.phase == RequestReceiptPhase.SENT) error("disk failure")
-            receipt
-        }
+        val executor = DurableTranslationAttemptExecutor.forTesting(
+            persistReceipt = { receipt: RequestReceipt ->
+                if (receipt.phase == RequestReceiptPhase.SENT) error("disk failure")
+                receipt
+            },
+        )
 
         var failed = false
         try {
@@ -94,10 +98,12 @@ class DurableTranslationAttemptExecutorTest {
     @Test fun transportFailureLeavesLastDurablePhaseSent() = runBlocking {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
-        val executor = DurableTranslationAttemptExecutor.forTesting { receipt: RequestReceipt ->
-            persisted += receipt.phase
-            receipt
-        }
+        val executor = DurableTranslationAttemptExecutor.forTesting(
+            persistReceipt = { receipt: RequestReceipt ->
+                persisted += receipt.phase
+                receipt
+            },
+        )
 
         var failed = false
         try {
