@@ -3,53 +3,55 @@
 ## Identity
 - Frozen baseline: `build/p0f-hardburn-mp4` @ `861aadcb36cccee83d2c86e9a0c0a03b1efe6720`
 - Implementation branch: `build/p0g-gpt6-cleanroom-v1`
-- Last reconciled branch HEAD before this checkpoint: `700855d8f646fa1702162802f136f209ab374248`
+- Last reconciled branch HEAD before this checkpoint: `a2efed20a0552e7e697539f5a5f726f4cb913964`
 - Canonical design: `ASTRA_TRANSLATION_SYSTEM_MASTERPLAN_V4_1.md` — Translation & Subtitle System V1 V4.1 Final
 
 ## Current batch/task
-B011 independent semantic timing/index/SRT primitives, while B003/B004 CI and experiment gates proceed.
+B011 semantic durability foundations: manual revision preservation, display timing/index/SRT, and stale response fencing. Production UI/session resume wiring remains later.
 
 ## Completed
-- B001 baseline freeze and regression ledger.
-- B002 typed clocks, semantic ownership models, legacy bridge, and minimal atomic session-store foundations.
-- B003 orthogonal provider classification + bounded retry/recovery foundations.
-- B004 shadow semantic segmenter/planner and X002 seed harness; no production activation.
-- B011 pure primitives: display timing preserves speech intervals and only extends into explicit known gaps; binary half-open cue index; semantic-unwrapped UTF-8 SRT construction with ORIGINAL_VIDEO vs EXPORTED_RANGE clock policy.
+- B001 baseline freeze/regression ledger.
+- B002 typed clocks, semantic ownership, legacy bridge, minimal atomic session-store foundation.
+- B003 orthogonal provider outcome + retry/recovery foundation; B003 unit tests observed PASS in Actions.
+- B004 shadow semantic segmenter/planner + X002 seed harness; no production activation.
+- B011 display timing, binary cue index, explicit-clock semantic SRT primitives.
+- B011 manual edit policy: retranslation creates machine candidates without overwriting effective manual text; source changes retain manual history and mark REBASE_REQUIRED; style/layout changes do not invalidate translation.
+- Session fencing foundation rejects stale epoch, stale manifest/entry revision, and mismatched request signature before adoption.
 
 ## Partial / blocked
-- B003 production client integration awaits completed branch CI verification.
-- B004 production activation remains BLOCKED_BY_X002.
-- X001 clock mapping remains NOT_STARTED and B007 remains BLOCKED_BY_X001.
-- B011 manual-edit UI/controller wiring and recovery harness remain incomplete.
-- B006 Arabic/Unicode/layout foundation remains next independent safe slice.
+- B003 full CI conclusion still pending at the last inspection; production client integration not yet activated.
+- B004 activation remains BLOCKED_BY_X002.
+- B007 clock fix remains BLOCKED_BY_X001.
+- Session receipt file persistence and process-death recovery scan are not yet complete.
+- B006 Arabic/Unicode/layout foundations remain independent safe work.
 
 ## Experiments
 - X001: NOT_STARTED
 - X002: HARNESS_READY (seed only; no live/human verdict)
 - X003: NOT_STARTED
 - X004: NOT_STARTED
-- X005: HARNESS_READY (partial store/fencing foundations only; no crash/device run)
-- X006: HARNESS_READY (CueIndex random-seek contract only; no performance measurement)
+- X005: HARNESS_READY (codec/manual/fence foundations; no Android crash/ENOSPC run)
+- X006: HARNESS_READY (CueIndex correctness fixture only; no device performance measurement)
 
 ## Latest meaningful test status
 - Frozen baseline Android CI `37648228258`: historical PASS.
-- B003 run `37723687884`: Unit tests observed PASS; lint was running at last check.
-- B004 run `37723984637`: started; final result not yet recorded.
-- B011 tests are committed for CI; no PASS claim until Actions completes.
+- B003 run `37723687884`: Unit tests PASS; lint was running at last inspection.
+- B004 run `37723984637`: Unit tests were running at last inspection.
+- B011 commits are queued through normal branch CI; do not treat as PASS until Actions completes.
 
 ## Known deviations / repository facts
-- Execution state was stale early in the campaign; it is now updated at coherent checkpoints.
-- STT still infers seconds-vs-ms by magnitude; no speculative fix before X001.
-- `SttAudioPreparer.sourceStartUs` is not yet an activated presentation mapping.
-- Repository has no Gradle wrapper; CI uses installed Gradle.
-- Display timing uses known STT speech gaps conservatively; it does not label unknown audio as silence.
+- Execution state was stale early in the campaign and is now updated at coherent checkpoints.
+- STT still guesses seconds-vs-ms; no timing interpretation change before X001.
+- `sourceStartUs` exists but is not yet promoted into an unverified production mapping.
+- No Gradle wrapper; CI uses installed Gradle.
 
 ## Active architectural decisions
-- Semantic content, display timing, layout, and rendering remain separate ownership layers.
-- Core V1 timing is `Long` microseconds and half-open intervals.
-- SRT owns semantic unwrapped text and explicit clock policy, not bitmap line wrapping.
-- Unknown remote provider outcome is never blindly re-posted.
+- Manual semantic truth outranks machine candidate and survives style/SRT/render changes.
+- Retranslation is additive candidate history, not destructive replacement.
+- Async response adoption is fenced by epoch + expected revisions + request signature.
+- Core time uses half-open `Long` microseconds.
+- SRT is semantic-unwrapped with explicit ORIGINAL_VIDEO / EXPORTED_RANGE clock ownership.
 - No experiment-gated production activation without evidence.
 
 ## RESUME HERE
-Inspect current CI. Fix any regression first. If green, build B006 TextPolicy/Android boundary/layout foundations in shadow mode; do not switch production renderer before X003/X004.
+Inspect current branch CI and repair failures first. Then build B006 TextPolicy/Android boundary/layout foundations in shadow mode, without changing the default preview/export renderer before X003/X004.
