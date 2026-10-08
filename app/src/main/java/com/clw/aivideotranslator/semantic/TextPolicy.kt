@@ -47,7 +47,7 @@ object TextPolicy {
         val bidiReview = codePoints.any { it in bidiReviewCodePoints }
         val warnings = buildSet {
             if (bidiReview) add("BIDI_CONTROL_REVIEW")
-            if (raw.any { Character.getType(it) == Character.FORMAT && it != '\u200C' && it != '\u200D' }) {
+            if (raw.any { Character.getType(it) == Character.FORMAT.toInt() && it != '\u200C' && it != '\u200D' }) {
                 add("FORMAT_CONTROL_PRESENT")
             }
         }
