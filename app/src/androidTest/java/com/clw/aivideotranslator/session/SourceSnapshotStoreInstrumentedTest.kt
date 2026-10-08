@@ -106,8 +106,16 @@ class SourceSnapshotStoreInstrumentedTest {
         store.createSession("session-1")
         val attachment = attachment()
         val attached = store.bindInitialSourceAttachment("session-1", 0, attachment)
-        val prepared = RequestReceipt("a1", "session-1", "u1", attached.epoch, "synthetic", attached.revision, null,
-            RequestReceiptPhase.PREPARED)
+        val prepared = RequestReceipt(
+            attemptId = "a1",
+            sessionId = "session-1",
+            unitId = "u1",
+            epoch = attached.epoch,
+            requestSignature = "synthetic",
+            expectedManifestRevision = attached.revision,
+            expectedActiveEntryRevisionId = null,
+            phase = RequestReceiptPhase.PREPARED,
+        )
         store.writeReceipt(prepared)
         val bound = store.bindInitialSourceSnapshot("session-1", attached.revision, snapshot(attachment))
         rejected { store.markSentIfCurrent(prepared.copy(phase = RequestReceiptPhase.SENT)) }
