@@ -1,6 +1,8 @@
 package com.clw.aivideotranslator.session
 
 import com.clw.aivideotranslator.provider.ProtocolOutcome
+import com.clw.aivideotranslator.semantic.TranslationRequestPlan
+import com.clw.aivideotranslator.semantic.TranslationPlanner
 import com.clw.aivideotranslator.semantic.TranslationValidationResult
 import com.clw.aivideotranslator.semantic.TranslationValidationState
 import com.clw.aivideotranslator.semantic.TranslationValidator
@@ -24,6 +26,24 @@ data class ReceiptRecoveryPlan(
 
 object ReceiptRecoveryPlanner {
     fun plan(
+        receipt: RequestReceipt,
+        manifest: SessionManifest,
+        requestPlan: TranslationRequestPlan,
+    ): ReceiptRecoveryPlan {
+        if (
+            requestPlan.unitId != receipt.unitId ||
+            requestPlan.requestSignature != receipt.requestSignature ||
+            !TranslationPlanner.isRequestPlanSelfConsistent(requestPlan)
+        ) {
+            return ReceiptRecoveryPlan(
+                ReceiptRecoveryAction.STALE_RECEIPT,
+                fenceResult = AdoptionFenceResult.SIGNATURE_MISMATCH,
+            )
+        }
+        return planBoundSource(receipt, manifest, requestPlan.exactSourceText)
+    }
+
+    private fun planBoundSource(
         receipt: RequestReceipt,
         manifest: SessionManifest,
         sourceText: String,

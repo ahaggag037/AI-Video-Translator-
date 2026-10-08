@@ -43,21 +43,7 @@ object TranslationPlanner {
             "nvidia-text-v1 does not send few-shot examples"
         }
         val examples = approvedExamples.sortedBy { it.id }
-        val requestFields = buildList {
-            add(profile.id)
-            add(profile.providerId)
-            add(profile.model)
-            add(profile.systemContent)
-            add(profile.sourceLanguage)
-            add(profile.targetLanguage)
-            add(profile.protocolVersion)
-            add(profile.maxTokens.toString())
-            add(profile.temperature.toString())
-            add(profile.stream.toString())
-            add(unit.sourceText)
-            examples.forEach { add(it.id); add(it.source); add(it.target) }
-        }
-        val requestSignature = canonicalSha256(requestFields)
+        val requestSignature = canonicalSha256(requestFields(profile, unit.sourceText, examples))
         val acceptanceSignature = canonicalSha256(
             listOf(requestSignature) + applicableAcceptanceDependencies.sorted(),
         )
@@ -69,6 +55,33 @@ object TranslationPlanner {
             requestSignature = requestSignature,
             acceptanceSignature = acceptanceSignature,
         )
+    }
+
+    fun isRequestPlanSelfConsistent(plan: TranslationRequestPlan): Boolean {
+        if (plan.unitId.isBlank() || plan.exactSourceText.length > 1_000) return false
+        if (plan.approvedExamples.isNotEmpty() && plan.profile.protocolVersion == "1") return false
+        val examples = plan.approvedExamples.sortedBy { it.id }
+        val expected = canonicalSha256(requestFields(plan.profile, plan.exactSourceText, examples))
+        return expected == plan.requestSignature
+    }
+
+    private fun requestFields(
+        profile: TranslationProfile,
+        exactSourceText: String,
+        examples: List<ApprovedExample>,
+    ): List<String> = buildList {
+        add(profile.id)
+        add(profile.providerId)
+        add(profile.model)
+        add(profile.systemContent)
+        add(profile.sourceLanguage)
+        add(profile.targetLanguage)
+        add(profile.protocolVersion)
+        add(profile.maxTokens.toString())
+        add(profile.temperature.toString())
+        add(profile.stream.toString())
+        add(exactSourceText)
+        examples.forEach { add(it.id); add(it.source); add(it.target) }
     }
 
     internal fun canonicalSha256(fields: List<String>): String {

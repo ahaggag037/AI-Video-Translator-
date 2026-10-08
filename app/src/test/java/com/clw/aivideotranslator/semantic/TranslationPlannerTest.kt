@@ -45,4 +45,10 @@ class TranslationPlannerTest {
             // expected
         }
     }
+
+    @Test fun requestPlanSelfConsistencyBindsExactSourceTextToSignature() {
+        val plan = TranslationPlanner.plan(unit("The value is 12.5%."))
+        assertTrue(TranslationPlanner.isRequestPlanSelfConsistent(plan))
+        assertFalse(TranslationPlanner.isRequestPlanSelfConsistent(plan.copy(exactSourceText = "The value is 125%.")))
+    }
 }
