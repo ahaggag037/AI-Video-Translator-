@@ -12,7 +12,7 @@ State: NOT_STARTED (shadow engine implemented; official font provenance resolved
 - `SubtitleFontProfile` requires a pinned SHA-256 and renderer environment provenance. Exact family/weight remains experiment-gated.
 
 ## Official Noto Sans Arabic provenance candidate
-Canonical D012 names **Noto Sans Arabic** as the V1 default family. The clean-room repository currently contains no `res/font` directory and no vendored Noto font/license, so no device is yet guaranteed to use the same Arabic face.
+ACCEPTED AR-03 (Runtime Kernel V3.1 baseline) commits to a bundled pinned licensed Arabic-capable font system; exact family/weight remains X003-gated. **Noto Sans Arabic** is a provenance-resolved candidate, not an accepted family choice. The clean-room repository currently contains no `res/font` directory and no vendored Noto font/license, so no device is yet guaranteed to use the same Arabic face.
 
 Upstream facts were resolved directly from the official `notofonts/arabic` GitHub repository:
 - release tag: `NotoSansArabic-v2.012`
@@ -25,7 +25,7 @@ This is provenance only. The release binary could not be materialized through th
 
 ## Required font intake before HARNESS_READY
 1. Deterministically materialize the official `NotoSansArabic-v2.012` release artifact from the upstream release.
-2. Select the intended static/variable Regular face deliberately; record the exact path/name and whether the app uses a static or variable font.
+2. Select a static/variable face and weight deliberately as an experimental candidate; record the exact path/name and whether the app uses a static or variable font.
 3. Compute SHA-256 of the exact bundled font bytes and record it in `SubtitleFontProfile`/test provenance.
 4. Vendor the applicable OFL-1.1 license/attribution alongside the app asset.
 5. Add a build/test assertion that the packaged font bytes match the pinned SHA-256; fail closed on mismatch rather than falling back silently.
@@ -37,3 +37,4 @@ This is provenance only. The release binary could not be materialized through th
 - Verify glyph coverage/fallback behavior and renderer provenance.
 - Record actual overflow/readability/containment outcomes, including N26 reader recovery.
 - Do not activate production rendering before X003 and X004 gates.
+

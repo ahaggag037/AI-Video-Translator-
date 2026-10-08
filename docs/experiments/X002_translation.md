@@ -3,7 +3,7 @@
 State: HARNESS_READY (N25 source corpus shape complete; no provider outputs or human Arabic verdict recorded).
 
 ## Purpose
-Compare legacy segmentation with semantic-v1 and, only if separately approved for experiment, bounded deterministic approved examples. Never use previous translated target text as hidden context.
+Per ACCEPTED AR-01 (Runtime Kernel V3.1 baseline), X002 compares semantic unit alone; semantic unit plus bounded neighboring SOURCE context; and approved deterministic terminology/examples where useful. Keep legacy segmentation/request behavior as the production comparator. Never use previous TARGET translation chains or rolling translated target context. Every output-affecting input participates in request identity.
 
 ## Current safe implementation
 - `SourceSegmenter` is shadow-only and requires presentation-anchored words supplied by a clock boundary; it does not infer STT units.
@@ -17,3 +17,4 @@ No paid/live NVIDIA calls and no human Arabic scoring have been performed for th
 
 ## Required completion evidence
 Run the same 48 source passages through the legacy baseline and semantic-v1 under frozen request identities, then conduct a blind Arabic review using the canonical rubric. Record critical omissions, number/integrity corruption, command following, fidelity/naturalness ratings, request counts, review-required incidence and layout-overflow incidence. N25 requires >=90% rated >=4/5 for fidelity and naturalness and zero critical errors in the reviewed subset. Any approved-example profile must be compared on the same units under a distinct request identity; failure keeps text-v1/legacy behavior rather than silently changing model or prompt.
+
