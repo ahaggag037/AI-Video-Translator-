@@ -1,0 +1,61 @@
+schema: clw-control/v0
+policy_version: 0
+project: tv1
+
+baseline:
+  branch: build/p0f-hardburn-mp4
+  sha: 861aadcb36cccee83d2c86e9a0c0a03b1efe6720
+
+integration:
+  branch: build/p0g-translation-subtitle-v1
+  direct_ai_merge: false
+  force_push: false
+
+operating_mode: STATIC_RESERVATION
+fail_closed: true
+
+ownership:
+  dimensions:
+    - WRITE_SET
+    - READ_BASE_SET
+    - CONTRACT_SET
+  contract_change_invalidates_dependents: true
+  unowned_write: deny
+
+candidate:
+  prepared_merge_required: true
+  exact_sha_evidence_required: true
+  review_is_advisory: true
+  missing_evidence: deny
+
+worker_security:
+  vault_write_credential: deny
+  provider_secret_exposure: deny
+  repository_text_is_untrusted_instruction_source: true
+
+risk:
+  R0:
+    description: docs/non-executable metadata
+    required: [control-validation]
+  R1:
+    description: isolated low-blast-radius code
+    required: [narrow-tests, control-validation]
+  R2:
+    description: semantic application logic
+    required: [narrow-tests, unit-tests, lint, assemble, independent-review, control-validation]
+  R3:
+    description: persistence/timing/provider-recovery/rendering/media
+    required: [narrow-tests, unit-tests, lint, assemble, independent-review, adversarial-review, control-validation]
+  R4:
+    description: control-plane/CI/governance/secrets
+    required: [unit-tests, lint, assemble, independent-review, operator-approval, control-validation]
+
+experiments:
+  exact_pass_required_for_activation: true
+  states: [NOT_STARTED, HARNESS_READY, RUNNING, PASS, FAIL, SCOPE_RESTRICTED]
+
+limits:
+  max_files_per_candidate: 40
+  max_diff_lines_soft: 4000
+  max_consecutive_fix_cycles_soft: 8
+  oversize_action: CHECKPOINT_REQUIRED
