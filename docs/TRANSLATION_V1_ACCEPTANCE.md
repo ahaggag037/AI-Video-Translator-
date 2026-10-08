@@ -2,6 +2,8 @@
 
 **NOT RELEASE-READY. Task17 NOT ACTIVATED.** Evidence index, not a chronological journal. Historical details live in Git/CI and `docs/experiments/`.
 
+Canonical successor entry point: **`docs/TRANSLATION_V1_SUCCESSOR_HANDOFF.md`**. External coordination surfaces (Notion, ModelBridge, Base44) are non-authoritative unless explicitly reactivated; current status is recorded in the successor handoff.
+
 Branch: `build/p0g-gpt6-cleanroom-v1`. Frozen P0-F: `build/p0f-hardburn-mp4` @ `861aadcb36cccee83d2c86e9a0c0a03b1efe6720`. Canonical V4.1 report is available in this session as a user attachment. AR01–AR05 remain accepted; no architecture amendment in this checkpoint.
 
 ## Current verified checkpoint
@@ -49,4 +51,4 @@ Scope: compile/test repair; pre-construction source adoption fencing; typed corr
 4. X003 human readability and X004 decoded-device parity before new renderer becomes default.
 5. X006 performance qualification and final B013 regression/device checklist.
 
-Style/edit/re-export must never repeat successful AI work. Preserve manual truth. No raw provider response, key, real source locator or private transcript in logs/relay. Details, known defects and exact next action are in `TRANSLATION_V1_EXECUTION_STATE_GPT6.md`.
+Style/edit/re-export must never repeat successful AI work. Preserve manual truth. No raw provider response, key, real source locator or private transcript in logs/relay. Details, known defects and exact next action are in `TRANSLATION_V1_EXECUTION_STATE_GPT6.md` and the canonical successor handoff.
