@@ -1,6 +1,6 @@
 # B012 — Immutable source attachment / resume prerequisite
 
-State: IMPLEMENTED, DEVICE-VERIFIED, NOT ACTIVATED. Exact live-probe checkpoint: `9a5f2d8dd3fcacd677d03ab91c9a95f2b435d3d2`. Android CI run `37766064823` and API35 recovery run `37766064846` are green; recovery artifact `11544906188`, digest `sha256:5d7ca34a1553574c6cac5f00d6e924d0b14d1a7455bec1c20f8d358310a5d986`. This is not a new X005 PASS and does not close Task17.
+State: IMPLEMENTED, API35 EMULATOR-VERIFIED, NOT ACTIVATED. Source-composition repair checkpoint: `b92e3807ee95757f8230fe8009d246ac02fe1c3e`; Android CI `37799782433` and recovery `37799782358` succeeded. Recovery artifact `11560945445`, SHA-256 `096394b5204fd9baa8c1dd80b4c3cb6ba3024d63401697a007f8617f19fbf30d`; downloaded archive digest and XML independently checked: 44 tests, zero failures/errors/skips, including all 13 coordinator cases. This is descendant compatibility, not a new X005 PASS or Task17 activation. The original live-probe evidence remains in Git history at `9a5f2d8d`.
 
 ## Contract
 
@@ -24,9 +24,11 @@ This snapshot contract deliberately does not bless the legacy magnitude-based ST
 
 - Production `MainActivity`, `TranslationCard`, NVIDIA transport, STT unit inference, SRT and renderers are unchanged.
 - Controller/UI resume remains blocked.
-- Next ownership bridge is behavioral provenance only: `SttAudioPreparer` must expose the exact input container audio-track descriptor and PCM frame count it actually used, so a future durable builder cannot persist one track while decoding another.
-- A separate additive detailed-STT result must later expose exact response hash/parser/profile provenance to the snapshot builder without changing legacy STT behavior or activating X001.
-- New controller must own one store instance per root. This is not a multi-process/multi-writer database.
+- Detailed preparation now exposes actual input-track and PCM evidence. The additive STT observation binds submitted sample bytes, accepted legacy parse, request profile, parser and response hash, without persisting the verbatim body. The factory rejects WAV replacement and drops interpreted word times under UNVERIFIED.
+- SourceSessionCoordinator now freezes a full source token BEFORE capture/factory work and adopts only under an unchanged token, atomically under the store lock. No automatic semantic CAS retry, including revision-only drift. Identical bytes are not authorization to cross epochs.
+- Reopen reads manifest+attachment under one lock. Only known attachment file/codec failures become CORRUPT_BINDING; invalid session/manifest and probe/programmer failures remain distinct failures. A successful URI probe still requires post-I/O token revalidation.
+- Application ownership checkpoint is indexed in the current Execution State. A new controller must use the single Application-owned store. This is not a multi-process/multi-writer database.
+- Remaining blocker: SourceAttachmentBuilder deletes its private capture, while preparation later opens the URI separately. Matching metadata does not prove the same source bytes. Carry one validated stable capture/descriptor and an operation-start source token through preparation/submission/adoption before controller activation. The new coordinator token fences its own construction window only.
 - No locator/digest/transcript belongs in logs, Git or Relay. Tests use synthetic identities only.
 - Format guards: locator <=8192 UTF-16 units; source JSON <=65536 UTF-8 bytes; IDs use the existing <=128 bound and exclude `.`/`..`. These are bounded storage/input guards, not multimedia heuristics.
 - New source JSON parsing rejects wrong numeric types, unsupported versions, missing/unknown fields, content-address mismatch and out-of-range selection. Reads cap allocation before parsing.
@@ -41,6 +43,9 @@ Android live probe: a real `ContentResolver` read reproduces the full expected f
 
 Android snapshot/store: bind/restart; crash after immutable snapshot publication; manifest ENOSPC rollback/retry; binding fences prepared sends; wrong attachment and stale CAS are rejected; missing/corrupt/oversized active snapshot fails closed. Existing X005 instrumentation reruns as the compatibility check.
 
+Android coordinator: capture/snapshot epoch mutation DURING evidence construction must reject before immutable publication, with one builder invocation; competing capture cannot overwrite the winner; unchanged bind survives reopen. Missing/malformed/identity-mismatched/oversized/unreadable/integer-overflow attachment yields typed CORRUPT_BINDING without probe or manifest mutation. Invalid manifest/session and probe defects remain failures. Probe epoch drift stays STALE_OBSERVATION. These are deterministic interleavings exercising production composition, not a model of an isolated retry loop.
+
 ## Rollback
 
 All new behavior is additive/unwired. Revert source methods/callers together if needed; preserve private source/snapshot objects and existing translation/manual entries. Older manifest-v2 code reads the manifest shape but must not be treated as source-resume capable. Never relabel a v2 manifest as v1 to make an older build accept it. Gate statuses remain unchanged until their own accepted evidence exists.
+
