@@ -63,7 +63,8 @@ internal class SourceCaptureException(val status: SourceReadStatus, cause: Throw
  * provider open. A mutable/cloud DocumentsProvider therefore cannot serve one version to the
  * identity read and a different version to the metadata reads.
  *
- * Concurrency discipline: each capture owns a UNIQUE temp file and deletes it in `finally`.
+ * Concurrency discipline: each capture owns a UNIQUE temp file. build() closes it immediately;
+ * the operation-scoped capture() retains it until its Closeable owner is closed.
  * There is deliberately NO shared-directory sweep: an eager sweep could unlink another in-flight
  * capture's live temp path. Crash leftovers are reclaimed by Android cache eviction, not by this
  * class, so concurrent builders can never destroy each other's work.
@@ -84,7 +85,15 @@ object SourceAttachmentBuilder {
         sessionId: String,
         contentUri: String,
         requestedRange: PresentationIntervalUs? = null,
-    ): Result<SourceAttachment> = runCatching {
+    ): Result<SourceAttachment> = capture(context, sessionId, contentUri, requestedRange)
+        .map { captured -> captured.use { it.attachment } }
+
+    internal fun capture(
+        context: Context,
+        sessionId: String,
+        contentUri: String,
+        requestedRange: PresentationIntervalUs? = null,
+    ): Result<CapturedSource> = runCatching {
         val resolver = context.contentResolver
         val uri = Uri.parse(contentUri)
         if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority.isNullOrBlank()) {
@@ -98,11 +107,12 @@ object SourceAttachmentBuilder {
 
         val captureDir = File(context.cacheDir, "p0_source_capture").apply { mkdirs() }
         val copy = File.createTempFile("source-capture-", ".bin", captureDir)
+        var ownershipTransferred = false
         try {
             val fingerprint = copyAndHashOnce(resolver, uri, copy)
             val durationMs = readDurationMs(copy)
             val track = readFirstAudioTrack(copy)
-            SourceAttachmentAssembler.assemble(
+            val attachment = SourceAttachmentAssembler.assemble(
                 sessionId = sessionId,
                 inspection = SourceContentInspection(
                     observedContentUri = contentUri,
@@ -114,8 +124,9 @@ object SourceAttachmentBuilder {
                 audioTrack = track,
                 requestedRange = requestedRange,
             )
+            CapturedSource(copy, attachment).also { ownershipTransferred = true }
         } finally {
-            if (!copy.delete()) copy.deleteOnExit()
+            if (!ownershipTransferred && !copy.delete()) copy.deleteOnExit()
         }
     }
 
@@ -207,3 +218,4 @@ object SourceAttachmentBuilder {
         }
     }
 }
+

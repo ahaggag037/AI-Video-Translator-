@@ -86,6 +86,24 @@ object SttAudioPreparer {
             error("تعذر استبدال ملف WAV السابق")
         }
 
+        decodeFirstWindow(outputFile, durationUs) { it.setDataSource(context, sourceUri, null) }
+    }
+
+    /** Owned private source and unique output only; does not reopen a provider URI. */
+    internal fun preparePrivateSourceFirstMinute(
+        sourceCopy: File,
+        outputFile: File,
+    ): Result<DetailedSttAudioPreparation> = runCatching {
+        require(sourceCopy.isFile) { "private source capture is missing" }
+        require(sourceCopy.canonicalFile != outputFile.canonicalFile) { "source/output alias" }
+        decodeFirstWindow(outputFile, STT_SAMPLE_DURATION_US) { it.setDataSource(sourceCopy.absolutePath) }
+    }
+
+    private fun decodeFirstWindow(
+        outputFile: File,
+        durationUs: Long,
+        bindSource: (MediaExtractor) -> Unit,
+    ): DetailedSttAudioPreparation {
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
         var decoderStarted = false
@@ -101,7 +119,7 @@ object SttAudioPreparer {
         var inputTrack: SttInputAudioTrack? = null
 
         try {
-            extractor.setDataSource(context, sourceUri, null)
+            bindSource(extractor)
             val audioTrackIndex = findAudioTrack(extractor)
             require(audioTrackIndex >= 0) { "الفيديو لا يحتوي على مسار صوت قابل للتحويل إلى WAV" }
 
@@ -248,7 +266,7 @@ object SttAudioPreparer {
         require(outputFile.exists() && outputFile.length() > 44L) { "لم يتم إنشاء ملف WAV صالح" }
         val exactInputTrack = requireNotNull(inputTrack) { "تعذر إثبات مسار الصوت المستخدم" }
 
-        DetailedSttAudioPreparation(
+        return DetailedSttAudioPreparation(
             profile = SttAudioProfile(
                 file = outputFile,
                 sampleRateHz = outputSampleRate,
@@ -345,3 +363,4 @@ object SttAudioPreparer {
         return -1
     }
 }
+

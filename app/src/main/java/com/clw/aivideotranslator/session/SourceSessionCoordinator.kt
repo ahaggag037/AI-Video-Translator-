@@ -2,8 +2,6 @@ package com.clw.aivideotranslator.session
 
 import android.content.ContentResolver
 import android.content.Context
-import com.clw.aivideotranslator.DetailedSttAudioPreparation
-import com.clw.aivideotranslator.NvidiaSttTransportObservation
 import com.clw.aivideotranslator.semantic.PresentationIntervalUs
 
 /**
@@ -39,15 +37,7 @@ internal object SourceSessionCoordinator {
         store.bindInitialSourceAttachmentIfCurrent(token, attachment)
     }
 
-    fun snapshotAndBindInitialSource(
-        store: TranslationSessionStore,
-        sessionId: String,
-        preparation: DetailedSttAudioPreparation,
-        observation: NvidiaSttTransportObservation,
-    ): Result<SessionManifest> = snapshotAndBindInitialSource(store, sessionId) { attachment ->
-        NvidiaSourceSnapshotFactory.buildUnverified(attachment, preparation, observation)
-    }
-
+    /** Adoption-composition test seam only. Real STT operations use SourceSnapshotOperation. */
     internal fun snapshotAndBindInitialSource(
         store: TranslationSessionStore,
         sessionId: String,

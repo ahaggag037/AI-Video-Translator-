@@ -70,6 +70,10 @@ class TranslationSessionStore(
         }
     }
 
+    internal fun requireSourceTokenCurrent(token: SourceBindingToken) = synchronized(writerLock) {
+        checkSourceTokenUnlocked(token)
+    }
+
     internal fun readSourceResumeInputs(sessionId: String): SourceResumeInputs = synchronized(writerLock) {
         // Manifest/session errors are not attachment corruption and must propagate.
         val manifest = readManifestUnlocked(sessionId)
