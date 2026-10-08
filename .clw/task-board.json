@@ -1,0 +1,17 @@
+{
+  "schema": "clw-task-board/v0",
+  "project": "TV1",
+  "integration_branch": "build/p0g-translation-subtitle-v1",
+  "baseline_sha": "861aadcb36cccee83d2c86e9a0c0a03b1efe6720",
+  "tasks": [
+    {"id":"CT00","title":"Safety architecture freeze","state":"DONE","risk":"R4","depends_on":[]},
+    {"id":"CT01","title":"Minimal deterministic policy and state files","state":"DONE","risk":"R4","depends_on":["CT00"]},
+    {"id":"CT02","title":"Static reservation and candidate validation kernel","state":"IN_PROGRESS","risk":"R4","depends_on":["CT01"]},
+    {"id":"B001","title":"Freeze P0-F regression baseline and harness","state":"READY","risk":"R2","depends_on":[]},
+    {"id":"B002","title":"Semantic/time models and durable session foundation","state":"BLOCKED_BY_DEPENDENCY","risk":"R3","depends_on":["B001"]},
+    {"id":"B003","title":"Provider outcome and retry contracts","state":"BLOCKED_BY_DEPENDENCY","risk":"R3","depends_on":["B002"]},
+    {"id":"B004","title":"Shadow segmentation/planner/validator and X002 harness","state":"BLOCKED_BY_DEPENDENCY","risk":"R2","depends_on":["B003"]},
+    {"id":"B006","title":"Arabic text/layout/font experiment harness","state":"READY","risk":"R3","depends_on":["B001"]},
+    {"id":"B011","title":"Display timing, CueIndex, SRT, review/recovery harness","state":"BLOCKED_BY_DEPENDENCY","risk":"R3","depends_on":["B002"]}
+  ]
+}
