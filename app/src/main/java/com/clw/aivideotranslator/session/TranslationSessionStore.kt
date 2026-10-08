@@ -15,6 +15,8 @@ data class RecoveredCandidateCommitResult(
 fun interface SessionStoreFaultInjector {
     fun afterRecoveryEntryPublished(sessionId: String, unitId: String, revisionId: String)
 
+    fun afterAtomicPayloadWritten(file: File) = Unit
+
     companion object {
         val NONE = SessionStoreFaultInjector { _, _, _ -> }
     }
@@ -235,6 +237,7 @@ class TranslationSessionStore(
         try {
             stream = atomicFile.startWrite()
             stream.write(bytes)
+            faultInjector.afterAtomicPayloadWritten(file)
             stream.fd.sync()
             atomicFile.finishWrite(stream)
             stream = null
