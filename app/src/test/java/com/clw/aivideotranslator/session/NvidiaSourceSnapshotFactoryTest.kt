@@ -1,9 +1,10 @@
 package com.clw.aivideotranslator.session
 
 import com.clw.aivideotranslator.DetailedSttAudioPreparation
-import com.clw.aivideotranslator.NvidiaSttDetailedEvidenceParser
+import com.clw.aivideotranslator.NvidiaSttClient
 import com.clw.aivideotranslator.NvidiaSttParserContract
 import com.clw.aivideotranslator.NvidiaSttRequestProfile
+import com.clw.aivideotranslator.NvidiaSttTimingEvidenceInspector
 import com.clw.aivideotranslator.NvidiaSttTransportObservation
 import com.clw.aivideotranslator.NvidiaSttWireContract
 import com.clw.aivideotranslator.SttAudioPreparationProvenance
@@ -17,12 +18,23 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
 class NvidiaSourceSnapshotFactoryTest {
+    private val responseBody = """
+        {
+          "text": "Hello world.",
+          "words": [
+            {"word":"Hello","start":0.10,"end":0.25,"confidence":0.9},
+            {"word":"world.","start":0.30,"end":0.80,"confidence":0.8}
+          ]
+        }
+    """.trimIndent()
+
     private fun attachment() = SourceAttachment(
         sessionId = "session-1",
         contentUri = "content://synthetic.documents/video/1",
@@ -37,19 +49,6 @@ class NvidiaSourceSnapshotFactoryTest {
             sampleRateHz = 48_000,
             channelCount = 2,
         ),
-    )
-
-    private fun detailedParse(status: Int = 200) = NvidiaSttDetailedEvidenceParser.parse(
-        """
-        {
-          "text": "Hello world.",
-          "words": [
-            {"word":"Hello","start":0.10,"end":0.25,"confidence":0.9},
-            {"word":"world.","start":0.30,"end":0.80,"confidence":0.8}
-          ]
-        }
-        """.trimIndent(),
-        status,
     )
 
     private fun preparation(
@@ -91,7 +90,9 @@ class NvidiaSourceSnapshotFactoryTest {
         sampleSha256: String = sha256(wav),
     ) = NvidiaSttTransportObservation(
         requestProfile = requestProfile,
-        parsed = detailedParse(status),
+        result = NvidiaSttClient.parseResponse(responseBody, status),
+        parserVersion = NvidiaSttParserContract.ID,
+        rawResponseSha256 = NvidiaSttTimingEvidenceInspector.inspect(responseBody).rawResponseSha256,
         sampleSha256 = sampleSha256,
     )
 
@@ -118,8 +119,8 @@ class NvidiaSourceSnapshotFactoryTest {
         val wav = createPcmWav(sampleRate = 16_000, channels = 1, bits = 16, frames = 16_000)
         try {
             val observed = observation(wav)
-            assertEquals(100L, observed.parsed.result.words.first().startMs)
-            assertEquals(800L, observed.parsed.result.words.last().endMs)
+            assertEquals(100L, observed.result.words.first().startMs)
+            assertEquals(800L, observed.result.words.last().endMs)
             assertEquals(NvidiaSttParserContract.ID, observed.parserVersion)
 
             val source = attachment()
@@ -162,22 +163,45 @@ class NvidiaSourceSnapshotFactoryTest {
         }
     }
 
-    @Test fun responseForOneSampleCannotBePairedWithAnotherSamplesProvenance() {
-        val wavA = createPcmWav(16_000, 1, 16, 16_000)
-        val wavB = createPcmWav(16_000, 1, 16, 8_000)
+    @Test fun responseForOneSampleCannotBePairedWithAnotherEqualShapeSamplesProvenance() {
+        // Identical WAV structure and frame count; ONLY the PCM payload differs. Profile/header
+        // arithmetic cannot distinguish these — the sample digest fence must.
+        val wavA = createPcmWav(16_000, 1, 16, 16_000, fill = 0x21)
+        val wavB = createPcmWav(16_000, 1, 16, 16_000, fill = 0x5A)
         try {
-            // Observation truthfully bound to sample B must not mint a snapshot over preparation A.
-            val observationOfB = observation(wavB, sampleSha256 = sha256(wavB))
-            rejected { build(attachment(), preparation(wavA), observationOfB) }
+            assertNotEquals(sha256(wavA), sha256(wavB))
 
-            // A caller asserting A's bytes while carrying B's actual digest must also fail closed.
-            rejected { build(attachment(), preparation(wavB), observationOfB) }
+            // Observation truthfully anchored to B must not mint a durable snapshot over preparation A.
+            rejected { build(attachment(), preparation(wavA), observation(wavB)) }
+            rejected { build(attachment(), preparation(wavB), observation(wavA)) }
 
-            // Garbage digests never pass the content binding either.
+            // A foreign garbage digest never passes the content binding either.
             rejected { build(attachment(), preparation(wavA), observation(wavA, sampleSha256 = "d".repeat(64))) }
+
+            // Positive control: the consistent pairing is accepted and carries A's identity.
+            val snapshot = build(attachment(), preparation(wavA), observation(wavA))
+            assertEquals(sha256(wavA), snapshot.pcmSample.wavSha256)
         } finally {
             wavA.delete()
             wavB.delete()
+        }
+    }
+
+    @Test fun replacedSampleBytesAfterTransportAnchorCannotKeepOldProvenance() {
+        // The discriminating race: one mutable path, equal-shape A then B, anchor taken at "send".
+        val path = File.createTempFile("stt-sample-race", ".wav")
+        try {
+            writePcmWav(path, 16_000, 1, 16, 16_000, fill = 0x11)
+            val preparationA = preparation(path)
+            val anchoredAtSend = observation(path) // pre-send anchor over A bytes
+
+            // Path replaced by equal-shape B AFTER the transport anchor, before snapshot construction.
+            writePcmWav(path, 16_000, 1, 16, 16_000, fill = 0x77)
+            assertNotEquals(anchoredAtSend.sampleSha256, sha256(path))
+
+            rejected { build(attachment(), preparationA, anchoredAtSend) }
+        } finally {
+            path.delete()
         }
     }
 
@@ -262,7 +286,19 @@ class NvidiaSourceSnapshotFactoryTest {
         channels: Int,
         bits: Int,
         frames: Int,
-    ): File {
+        fill: Int = 0,
+    ): File = File.createTempFile("source-snapshot-factory", ".wav").also {
+        writePcmWav(it, sampleRate, channels, bits, frames, fill)
+    }
+
+    private fun writePcmWav(
+        target: File,
+        sampleRate: Int,
+        channels: Int,
+        bits: Int,
+        frames: Int,
+        fill: Int = 0,
+    ) {
         val bytesPerSample = bits / 8
         val dataBytes = frames * channels * bytesPerSample
         val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -280,11 +316,9 @@ class NvidiaSourceSnapshotFactoryTest {
             put("data".toByteArray(Charsets.US_ASCII))
             putInt(dataBytes)
         }.array()
-        return File.createTempFile("source-snapshot-factory", ".wav").apply {
-            outputStream().use { out ->
-                out.write(header)
-                out.write(ByteArray(dataBytes) { index -> (index and 0x7F).toByte() })
-            }
+        target.outputStream().use { out ->
+            out.write(header)
+            out.write(ByteArray(dataBytes) { index -> ((index + fill) and 0x7F).toByte() })
         }
     }
 }
