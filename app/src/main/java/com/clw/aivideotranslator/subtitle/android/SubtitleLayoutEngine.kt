@@ -3,6 +3,7 @@ package com.clw.aivideotranslator.subtitle.android
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.graphics.text.LineBreaker
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
@@ -132,7 +133,7 @@ class SubtitleLayoutEngine(
             .setLineSpacing(0f, config.lineSpacingMultiplier)
             .setTextDirection(direction)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
-            .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+            .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
             .build()
     }
 
