@@ -56,9 +56,10 @@ class SourceResumeEvaluatorTest {
         }
     }
 
-    @Test fun missingIoAndUnsupportedRemainDistinctRatherThanInventingSourceReplacement() {
+    @Test fun missingEmptyIoAndUnsupportedRemainExplicit() {
         listOf(
             SourceReadStatus.SOURCE_MISSING to SourceAvailability.SOURCE_MISSING,
+            SourceReadStatus.EMPTY_SOURCE to SourceAvailability.SOURCE_CHANGED,
             SourceReadStatus.IO_FAILURE to SourceAvailability.IO_FAILURE,
             SourceReadStatus.UNSUPPORTED to SourceAvailability.UNSUPPORTED,
         ).forEach { (status, expected) ->

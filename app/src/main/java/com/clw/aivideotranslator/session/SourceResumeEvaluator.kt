@@ -15,7 +15,7 @@ data class SourceProbeToken(
     }
 }
 
-enum class SourceReadStatus { READABLE, PERMISSION_MISSING, SOURCE_MISSING, IO_FAILURE, UNSUPPORTED }
+enum class SourceReadStatus { READABLE, PERMISSION_MISSING, SOURCE_MISSING, EMPTY_SOURCE, IO_FAILURE, UNSUPPORTED }
 
 data class SourceReadObservation(
     val token: SourceProbeToken,
@@ -70,6 +70,7 @@ object SourceResumeEvaluator {
         return when (observation.status) {
             SourceReadStatus.PERMISSION_MISSING -> result(SourceAvailability.PERMISSION_MISSING)
             SourceReadStatus.SOURCE_MISSING -> result(SourceAvailability.SOURCE_MISSING)
+            SourceReadStatus.EMPTY_SOURCE -> result(SourceAvailability.SOURCE_CHANGED)
             SourceReadStatus.IO_FAILURE -> result(SourceAvailability.IO_FAILURE)
             SourceReadStatus.UNSUPPORTED -> result(SourceAvailability.UNSUPPORTED)
             SourceReadStatus.READABLE -> if (observation.fingerprint != attachment.fingerprint) {
