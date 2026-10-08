@@ -1,6 +1,7 @@
 package com.clw.aivideotranslator
 
 import java.io.File
+import java.lang.reflect.Modifier
 import java.security.MessageDigest
 import okhttp3.MultipartBody
 import okio.Buffer
@@ -49,7 +50,11 @@ class NvidiaSttTransportObservationTest {
     @Test fun observationGraphIsStructurallyRedacted() {
         // The durable provenance type must not expose the verbatim body, the timing-evidence graph
         // that nests it, or the old combined detailed-parse shape.
-        val fieldNames = NvidiaSttTransportObservation::class.java.declaredFields.map { it.name }
+        // Compiler/plugin static metadata (for example Compose's $stable) is not part of an
+        // observation instance. Keep the exact allowlist for every instance field.
+        val fieldNames = NvidiaSttTransportObservation::class.java.declaredFields
+            .filterNot { Modifier.isStatic(it.modifiers) }
+            .map { it.name }
         assertFalse(fieldNames.any { it.contains("rawResponseUtf8") })
         assertFalse(fieldNames.any { it.contains("timingEvidence") })
         assertFalse(fieldNames.any { it.contains("parsed") })
