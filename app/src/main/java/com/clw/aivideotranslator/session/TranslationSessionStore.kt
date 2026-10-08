@@ -126,26 +126,35 @@ class TranslationSessionStore(
 
     fun writeReceipt(receipt: RequestReceipt): RequestReceipt = synchronized(writerLock) {
         val manifest = readManifestUnlocked(receipt.sessionId)
-        if (receipt.phase == RequestReceiptPhase.PREPARED) {
-            check(manifest.epoch == receipt.epoch) { "cannot prepare request for stale epoch" }
-            check(manifest.revision == receipt.expectedManifestRevision) { "cannot prepare request for stale manifest" }
-            check(manifest.activeEntryRefs[receipt.unitId] == receipt.expectedActiveEntryRevisionId) {
-                "cannot prepare request for stale entry"
-            }
-        }
         val directory = File(sessionDir(receipt.sessionId), "requests").apply {
             require(mkdirs() || isDirectory) { "cannot create request directory" }
         }
         val file = File(directory, "${receipt.attemptId}.json")
-        if (file.exists()) {
-            val existing = readReceiptFileUnlocked(file)
+        val existing = if (file.exists()) readReceiptFileUnlocked(file) else null
+
+        if (existing != null) {
             validateReceiptTransition(existing, receipt)
             if (existing == receipt) return@synchronized existing
         } else {
             require(receipt.phase == RequestReceiptPhase.PREPARED) { "receipt must begin PREPARED" }
         }
+
+        when (receipt.phase) {
+            RequestReceiptPhase.PREPARED -> requireCurrentReceiptFence(receipt, manifest, "prepare")
+            RequestReceiptPhase.SENT -> {
+                require(existing?.phase == RequestReceiptPhase.PREPARED) { "SENT must advance a durable PREPARED receipt" }
+                requireCurrentReceiptFence(receipt, manifest, "send")
+            }
+            RequestReceiptPhase.RECEIVED -> Unit // late/stale responses remain durable audit evidence
+        }
+
         writeAtomicTextUnlocked(file, SessionCodec.encodeReceipt(receipt))
         receipt
+    }
+
+    fun markSentIfCurrent(sent: RequestReceipt): RequestReceipt {
+        require(sent.phase == RequestReceiptPhase.SENT) { "markSentIfCurrent requires SENT receipt" }
+        return writeReceipt(sent)
     }
 
     fun readReceipt(sessionId: String, attemptId: String): RequestReceipt = synchronized(writerLock) {
@@ -161,6 +170,11 @@ class TranslationSessionStore(
             ?.sortedBy { it.name }
             ?.map(::readReceiptFileUnlocked)
             ?: emptyList()
+    }
+
+    private fun requireCurrentReceiptFence(receipt: RequestReceipt, manifest: SessionManifest, verb: String) {
+        val fence = SessionFencing.check(receipt.adoptionFence(), manifest, receipt.requestSignature)
+        check(fence == AdoptionFenceResult.CURRENT) { "cannot $verb request under stale fence: $fence" }
     }
 
     private fun validateReceiptTransition(existing: RequestReceipt, next: RequestReceipt) {

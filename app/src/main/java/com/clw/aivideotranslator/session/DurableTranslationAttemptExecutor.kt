@@ -4,10 +4,25 @@ import com.clw.aivideotranslator.provider.TranslationProviderOutcome
 import com.clw.aivideotranslator.semantic.TranslationPlanner
 import com.clw.aivideotranslator.semantic.TranslationRequestPlan
 
-class DurableTranslationAttemptExecutor(
-    private val persistReceipt: (RequestReceipt) -> RequestReceipt,
+class DurableTranslationAttemptExecutor private constructor(
+    private val persistPrepared: (RequestReceipt) -> RequestReceipt,
+    private val persistSentIfCurrent: (RequestReceipt) -> RequestReceipt,
+    private val persistReceived: (RequestReceipt) -> RequestReceipt,
 ) {
-    constructor(store: TranslationSessionStore) : this(store::writeReceipt)
+    constructor(store: TranslationSessionStore) : this(
+        persistPrepared = store::writeReceipt,
+        persistSentIfCurrent = store::markSentIfCurrent,
+        persistReceived = store::writeReceipt,
+    )
+
+    internal constructor(
+        persistReceipt: (RequestReceipt) -> RequestReceipt,
+        persistSentIfCurrent: (RequestReceipt) -> RequestReceipt = persistReceipt,
+    ) : this(
+        persistPrepared = persistReceipt,
+        persistSentIfCurrent = persistSentIfCurrent,
+        persistReceived = persistReceipt,
+    )
 
     suspend fun execute(
         prepared: RequestReceipt,
@@ -20,14 +35,15 @@ class DurableTranslationAttemptExecutor(
         require(requestPlan.requestSignature == prepared.requestSignature) { "request plan signature mismatch" }
         require(TranslationPlanner.isRequestPlanSelfConsistent(requestPlan)) { "request plan is not self-consistent" }
 
-        val persistedPrepared = persistReceipt(prepared)
+        val persistedPrepared = persistPrepared(prepared)
         check(persistedPrepared == prepared) { "PREPARED receipt persistence mismatch" }
 
         val sent = prepared.copy(phase = RequestReceiptPhase.SENT)
-        val persistedSent = persistReceipt(sent)
+        val persistedSent = persistSentIfCurrent(sent)
         check(persistedSent == sent) { "SENT receipt persistence mismatch" }
 
         // This is the first point at which caller-provided transport code can run.
+        // The production constructor routes SENT through the store's atomic current-fence check.
         // If transport throws/cancels or RECEIVED persistence fails, durable state remains SENT
         // and recovery must treat the remote outcome as unknown rather than blindly reposting.
         val outcome = submit(requestPlan)
@@ -35,7 +51,7 @@ class DurableTranslationAttemptExecutor(
             phase = RequestReceiptPhase.RECEIVED,
             outcome = outcome,
         )
-        val persistedReceived = persistReceipt(received)
+        val persistedReceived = persistReceived(received)
         check(persistedReceived == received) { "RECEIVED receipt persistence mismatch" }
         return persistedReceived
     }
