@@ -3,27 +3,28 @@
 ## Identity
 - Frozen baseline: `build/p0f-hardburn-mp4` @ `861aadcb36cccee83d2c86e9a0c0a03b1efe6720`
 - Implementation branch: `build/p0g-gpt6-cleanroom-v1`
-- Last reconciled branch HEAD before this checkpoint: `2e055752b6c3a53b69585f7c76e96a12f78029ef`
+- Last reconciled branch HEAD before this checkpoint: `31b3f861146b582d091676358bccd970dfb485c6`
 - Canonical design: `ASTRA_TRANSLATION_SYSTEM_MASTERPLAN_V4_1.md` — Translation & Subtitle System V1 V4.1 Final
 
 ## Current batch/task
-B006 safe-pre-experiment Unicode/boundary/layout ownership foundations. Production typography/rendering remains unchanged and gated by X003/X004.
+B003 detailed NVIDIA transport integration plus independent B004/B006/B011 foundations. Legacy production `translate()` remains unchanged; typed transport is additive for later durable session/controller use.
 
 ## Completed
 - B001 baseline freeze/regression ledger.
 - B002 typed clocks, semantic ownership, legacy bridge, minimal atomic store.
-- B003 orthogonal provider classification and bounded retry/recovery foundations; unit-test stage observed PASS.
-- B004 deterministic shadow segmentation/request planning + X002 seed harness; compile regression in `SourceSegmenter` was detected and corrected at `2e055752...` without activating the path.
-- B011 display timing, cue index, semantic SRT, manual-edit preservation, stale-response fencing foundations.
-- B006 raw-preserving Unicode policy, protected-span NFC derivation, Android ICU boundary adapter, and fail-closed layout result/geometry contracts.
+- B003 provider outcome classifier/retry policy verified by full Android CI run `37723687884`: unit tests, lint, debug APK, signature/checksum and artifacts all succeeded.
+- B003 detailed NVIDIA transport entry point uses the exact existing request body and returns structured outcomes; uncertain OkHttp failures fail closed as unknown remote outcome rather than inviting automatic repost.
+- B004 deterministic shadow segmentation/request planning + X002 seed harness; compile regression was detected and corrected at `2e055752...`.
+- B006 Unicode/boundary/layout ownership foundations in shadow mode.
+- B011 display timing, cue index, semantic SRT, manual-edit preservation and stale-response fencing foundations.
 
 ## Partial / blocked
-- Current CI for newer slices is pending/queued; fix any regression before activation.
+- The detailed transport is not wired into the user-visible translation controller yet; existing P0-F wrapper remains the active production behavior.
+- B004/B006/B011 latest workflows remain pending/in progress at this checkpoint; no PASS claim until Actions completes.
 - B005 remains BLOCKED_BY_X002.
 - B007 remains BLOCKED_BY_X001.
-- X003 is NOT_STARTED: no pinned font/raster/ink/device evidence yet.
-- Session receipt persistence/recovery scan and UI controller wiring remain incomplete.
-- Snapshot/preview/export adapters remain gated by X003/X004.
+- X003 has no pinned-font/raster/device evidence.
+- Session request-receipt persistence/recovery scan and UI controller wiring remain incomplete.
 
 ## Experiments
 - X001: NOT_STARTED
@@ -35,23 +36,25 @@ B006 safe-pre-experiment Unicode/boundary/layout ownership foundations. Producti
 
 ## Latest meaningful test status
 - Baseline CI `37648228258`: historical PASS on frozen SHA.
-- B003 run `37723687884`: Unit tests PASS at last observation; final workflow result pending at that checkpoint.
-- B004 compile regression was observed and fixed in commit `2e055752...`; follow-up CI must prove the repair.
-- Later B011/B006 tests are not marked PASS until Actions completes.
+- B003 CI `37723687884`: PASS end-to-end for repository CI workflow.
+- Fixed B004 CI `37724315502`: unit-test stage still in progress at last check.
+- B006 CI `37724433047`: unit-test stage in progress at last check.
+- This detailed-transport checkpoint is not marked PASS until its own Actions run completes.
 
 ## Known deviations / repository facts
 - Early execution-state staleness was corrected.
 - STT timing-unit inference remains unchanged pending X001.
 - `sourceStartUs` is not treated as verified presentation mapping without X001.
-- Exact font family/weight remains experiment-gated per architect delta; no permanent font commitment is hard-coded.
+- Exact font family/weight remains experiment-gated; no permanent font commitment is hard-coded.
+- HTTP `Retry-After` delta-seconds are honored by the detailed adapter; HTTP-date form is intentionally not guessed yet.
 
 ## Active architectural decisions
 - Semantic truth is independent of display truth.
-- Raw/manual text is preserved; canonical display text is derived and narrowly normalized.
-- Android/ICU owns shaping and legal boundary rules; no homegrown Arabic shaping/grapheme engine.
-- Accepted layout must contain ink + box inside safe area; no clipping/ellipsis/drop-word acceptance path.
-- Manual edits survive style/layout and retranslation.
-- Unknown remote outcome is never auto-reposted.
+- Provider outcomes remain orthogonal; unknown remote outcome is not auto-reposted.
+- `nvidia-text-v1` payload remains text-only, one semantic unit per request, system `en-ar`.
+- Raw/manual text is preserved; display canonicalization is derived.
+- Android/ICU owns shaping and boundaries.
+- Manual edits survive style/layout/retranslation.
 
 ## RESUME HERE
-Inspect current CI and repair failures first. Then implement X003 StaticLayout/ink/raster harness with a pinned experimental font candidate, or continue request-receipt recovery if device/font work is unavailable.
+Inspect current branch CI and repair any regression first. Then add durable RequestReceipt PREPARED/SENT/RECEIVED persistence and recovery adoption, without activating semantic segmentation or clock changes that remain experiment-gated.

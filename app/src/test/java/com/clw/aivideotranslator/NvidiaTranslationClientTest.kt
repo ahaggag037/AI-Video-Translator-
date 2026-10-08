@@ -105,6 +105,12 @@ class NvidiaTranslationClientTest {
         }
     }
 
+    @Test fun retryAfterDeltaSecondsParsesWithoutInventingDatePolicy() {
+        assertEquals(75_000L, NvidiaTranslationClient.parseRetryAfterMs("75"))
+        assertNull(NvidiaTranslationClient.parseRetryAfterMs("Wed, 21 Oct 2015 07:28:00 GMT"))
+        assertNull(NvidiaTranslationClient.parseRetryAfterMs("-1"))
+    }
+
     @Test fun existingSttParserStillProvidesMillisecondFixture() {
         val parsed = NvidiaSttClient.parseResponse("""
             {"text":"Hello world","words":[

@@ -1,5 +1,9 @@
 package com.clw.aivideotranslator
 
+import com.clw.aivideotranslator.provider.ProtocolOutcome
+import com.clw.aivideotranslator.provider.TranslationProviderOutcome
+import com.clw.aivideotranslator.provider.TranslationResponseClassifier
+import com.clw.aivideotranslator.provider.TransportOutcome
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -38,6 +42,63 @@ object NvidiaTranslationClient {
             .put("max_tokens", 1024)
             .put("stream", false)
             .toString()
+    }
+
+    /**
+     * Additive V1 transport entry point. It preserves the exact legacy request body while
+     * returning structured provider dimensions for durable session/recovery code.
+     *
+     * An OkHttp failure is conservatively treated as an unknown remote outcome because the
+     * callback alone cannot prove the request body never reached the provider. This prevents
+     * callers from blindly re-posting a request that may already have executed remotely.
+     */
+    suspend fun translateDetailed(apiKey: String, sourceText: String): TranslationProviderOutcome {
+        require(apiKey.trim().isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
+        val request = Request.Builder().url(ENDPOINT)
+            .header("Authorization", "Bearer ${apiKey.trim()}")
+            .header("Accept", "application/json")
+            .post(requestBody(sourceText).toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) {
+                        continuation.resume(
+                            TranslationResponseClassifier.transportFailure(mayHaveBeenSubmitted = true)
+                        )
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val outcome = try {
+                        response.use {
+                            val retryAfterMs = parseRetryAfterMs(it.header("Retry-After"))
+                            val body = it.body
+                            if (body.contentLength() > TranslationResponseClassifier.MAX_BODY_BYTES) {
+                                oversizedResponse(it.code, retryAfterMs)
+                            } else {
+                                val source = body.source()
+                                source.request((TranslationResponseClassifier.MAX_BODY_BYTES + 1).toLong())
+                                if (source.buffer.size > TranslationResponseClassifier.MAX_BODY_BYTES) {
+                                    oversizedResponse(it.code, retryAfterMs)
+                                } else {
+                                    TranslationResponseClassifier.classify(
+                                        httpStatus = it.code,
+                                        body = source.readUtf8(),
+                                        retryAfterMs = retryAfterMs,
+                                    )
+                                }
+                            }
+                        }
+                    } catch (_: IOException) {
+                        TranslationResponseClassifier.transportFailure(mayHaveBeenSubmitted = true)
+                    }
+                    if (continuation.isActive) continuation.resume(outcome)
+                }
+            })
+        }
     }
 
     suspend fun translate(apiKey: String, sourceText: String): String {
@@ -141,6 +202,21 @@ object NvidiaTranslationClient {
             invalidResponse("استجابة NVIDIA احتوت نص ترجمة غير صالح؛ لم يتم إنشاء SRT")
         }
     }
+
+    internal fun parseRetryAfterMs(value: String?): Long? {
+        val seconds = value?.trim()?.toLongOrNull() ?: return null
+        if (seconds < 0L) return null
+        return runCatching { Math.multiplyExact(seconds, 1_000L) }.getOrNull()
+    }
+
+    private fun oversizedResponse(httpStatus: Int, retryAfterMs: Long?): TranslationProviderOutcome =
+        TranslationProviderOutcome(
+            transport = TransportOutcome.RESPONSE_RECEIVED,
+            protocol = ProtocolOutcome.MALFORMED,
+            httpStatus = httpStatus,
+            retryAfterMs = retryAfterMs,
+            diagnosticCode = "BODY_TOO_LARGE",
+        )
 
     private fun extractTextContent(content: Any?): String {
         val text = when (content) {
