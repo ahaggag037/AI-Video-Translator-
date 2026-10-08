@@ -177,7 +177,8 @@ class NvidiaSourceSnapshotFactoryTest {
             val snapshot = NvidiaSourceSnapshotFactory.buildUnverified(outsideSelectedRange, preparation(wav), detailedParse())
             assertEquals(500_000L, snapshot.clock.observedPresentationOriginUs)
 
-            val invalidOrigin = preparation(wav).copy(profile = preparation(wav).profile.copy(
+            val basePreparation = preparation(wav)
+            val invalidOrigin = basePreparation.copy(profile = basePreparation.profile.copy(
                 sourceStartUs = 10_000_000,
                 sourceEndUs = 11_000_000,
             ))
@@ -201,7 +202,7 @@ class NvidiaSourceSnapshotFactoryTest {
             put("WAVE".toByteArray(Charsets.US_ASCII))
             put("fmt ".toByteArray(Charsets.US_ASCII))
             putInt(16)
-            putShort(1)
+            putShort(1.toShort())
             putShort(channels.toShort())
             putInt(sampleRate)
             putInt(sampleRate * channels * bytesPerSample)
