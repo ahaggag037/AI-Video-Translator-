@@ -56,11 +56,8 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         sessionId: String,
         attemptId: String,
         requestPlan: TranslationRequestPlan,
-        machineRevisionId: String,
-        entryRevisionId: String,
     ): RecoveredCandidateCommitResult = synchronized(writerLock) {
         require(isSafeId(sessionId) && isSafeId(attemptId)) { "invalid recovery identity" }
-        require(isSafeId(machineRevisionId) && isSafeId(entryRevisionId)) { "invalid recovery revision id" }
 
         val currentManifest = readManifestUnlocked(sessionId)
         val receipt = readReceiptUnlocked(sessionId, attemptId)
@@ -73,6 +70,7 @@ class TranslationSessionStore(private val sessionsRoot: File) {
         }
 
         val candidateText = requireNotNull(receipt.outcome?.candidateText) { "adoptable receipt missing candidate" }
+        val recoveryIds = RecoveryRevisionIdentity.forReceipt(receipt)
         val currentRecord = currentManifest.activeEntryRefs[receipt.unitId]?.let { revisionId ->
             readEntryUnlocked(sessionId, receipt.unitId, revisionId).record
         }
@@ -81,15 +79,15 @@ class TranslationSessionStore(private val sessionsRoot: File) {
             unitId = receipt.unitId,
             rawProviderText = candidateText,
             requestSignature = receipt.requestSignature,
-            machineRevisionId = machineRevisionId,
+            machineRevisionId = recoveryIds.machineRevisionId,
         )
         val entry = StoredTranslationEntry(
-            revisionId = entryRevisionId,
+            revisionId = recoveryIds.entryRevisionId,
             record = merged,
         )
 
         // Publish immutable history first. If the process dies before manifest publication,
-        // retrying with the same deterministic IDs verifies/reuses the same immutable bytes.
+        // the same frozen receipt deterministically reproduces the same immutable bytes and IDs.
         writeImmutableEntryUnlocked(sessionId, receipt.unitId, entry)
         val nextManifest = currentManifest.copy(
             revision = Math.addExact(currentManifest.revision, 1L),
