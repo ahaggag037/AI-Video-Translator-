@@ -73,6 +73,22 @@ internal class DurableLegacyTranslationOperation(
         DurableTranslationBatchResult(results.toList())
     }
 
+    /**
+     * Process-death recovery for a single durable attempt. The exact request is reconstructed only
+     * from the receipt identity plus the persisted request-plan file; STT timing or a media locator is
+     * neither required nor consulted. SENT therefore reopens without a POST, RECEIVED can adopt
+     * locally, and PREPARED may continue under the same durable executor policy.
+     */
+    suspend fun resumeAttempt(
+        sessionId: String,
+        attemptId: String,
+        submitter: TranslationPlanSubmitter,
+    ): Result<DurableTranslationUnitResult> = runCatching {
+        val receipt = store.readReceipt(sessionId, attemptId)
+        val plan = planStore.read(sessionId, receipt.unitId, receipt.requestSignature)
+        executeUnit(sessionId, plan, submitter)
+    }
+
     private suspend fun executeUnit(
         sessionId: String,
         plan: TranslationRequestPlan,
