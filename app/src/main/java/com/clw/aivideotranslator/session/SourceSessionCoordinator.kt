@@ -146,12 +146,7 @@ internal object SourceSessionCoordinator {
         val after = afterInputs.manifest
 
         if (SourceBindingToken.from(after) != SourceBindingToken.from(before)) {
-            return@runCatching SessionReopenAssessment(
-                source = SourceResumeAssessment(SourceAvailability.STALE_OBSERVATION),
-                snapshotAvailability = if (before.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
-                    SourceSnapshotAvailability.STALE_OBSERVATION
-                } else SourceSnapshotAvailability.NOT_BOUND,
-            )
+            return@runCatching staleReopen(before)
         }
 
         val attachmentAfter = afterInputs.attachment
@@ -173,6 +168,10 @@ internal object SourceSessionCoordinator {
         }
 
         val snapshotAfter = readSnapshotForReopen(store, sessionId)
+        val finalManifest = store.readManifest(sessionId)
+        if (SourceBindingToken.from(finalManifest) != SourceBindingToken.from(before)) {
+            return@runCatching staleReopen(before)
+        }
         if (snapshotAfter == null || snapshotAfter != snapshotBefore) {
             return@runCatching SessionReopenAssessment(
                 source = sourceAssessment,
@@ -186,6 +185,13 @@ internal object SourceSessionCoordinator {
             snapshot = snapshotAfter,
         )
     }
+
+    private fun staleReopen(before: SessionManifest) = SessionReopenAssessment(
+        source = SourceResumeAssessment(SourceAvailability.STALE_OBSERVATION),
+        snapshotAvailability = if (before.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
+            SourceSnapshotAvailability.STALE_OBSERVATION
+        } else SourceSnapshotAvailability.NOT_BOUND,
+    )
 
     private fun readSnapshotForReopen(
         store: TranslationSessionStore,
