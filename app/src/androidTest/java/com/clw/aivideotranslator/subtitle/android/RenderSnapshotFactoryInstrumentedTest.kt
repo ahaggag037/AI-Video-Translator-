@@ -73,7 +73,7 @@ class RenderSnapshotFactoryInstrumentedTest {
                 ArabicSubtitleCue("u0001", 0L, 1_000L, "قصير"),
                 ArabicSubtitleCue("u0002", 1_100L, 2_000L, "س".repeat(4_000)),
             ),
-            geometry = FrameGeometry(160, 90),
+            geometry = FrameGeometry(640, 360),
             font = font,
             rendererEnvironment = environment,
         )
