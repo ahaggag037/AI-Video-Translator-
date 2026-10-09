@@ -2,15 +2,39 @@ package com.clw.aivideotranslator.session
 
 import android.content.Context
 import com.clw.aivideotranslator.NvidiaSttClient
+import com.clw.aivideotranslator.NvidiaSttResult
 import com.clw.aivideotranslator.NvidiaSttTransportObservation
 import com.clw.aivideotranslator.NvidiaSttWireContract
 import com.clw.aivideotranslator.SttAudioProfile
 
+enum class SourceSnapshotDelivery {
+    LIVE_PROVIDER,
+    LOCAL_RECOVERY,
+    ALREADY_BOUND,
+}
+
 /**
- * Blocking, opt-in B012 operation; not wired to UI. The STT attempt lifecycle is durably journaled
- * before transport can run, so a process death never turns an already-possible remote submission
- * into a blind repost. RECEIVED snapshots can be adopted after restart without another provider
- * call. Clock activation and Task17/UI activation remain separately gated.
+ * One STT operation result. A legacy timed result is exposed only when THIS invocation actually
+ * received the provider response; recovery never fabricates or re-requests timing that was not
+ * durably accepted under X001. The raw provider body is never retained here.
+ */
+internal data class SourceSnapshotOperationResult(
+    val manifest: SessionManifest,
+    val delivery: SourceSnapshotDelivery,
+    val legacyResult: NvidiaSttResult? = null,
+) {
+    init {
+        require((delivery == SourceSnapshotDelivery.LIVE_PROVIDER) == (legacyResult != null)) {
+            "only a live provider response may expose the legacy parsed result"
+        }
+    }
+}
+
+/**
+ * Blocking, opt-in B012 operation. The STT attempt lifecycle is durably journaled before transport
+ * can run, so a process death never turns an already-possible remote submission into a blind repost.
+ * RECEIVED snapshots can be adopted after restart without another provider call. Clock activation
+ * remains X001-gated.
  */
 internal object SourceSnapshotOperation {
     fun transcribeAndBind(
@@ -18,9 +42,22 @@ internal object SourceSnapshotOperation {
         store: TranslationSessionStore,
         sessionId: String,
         apiKey: String,
-    ): Result<SessionManifest> = run(context, store, sessionId, transcribe = { profile ->
-        NvidiaSttClient.transcribeEnglishSampleDetailed(apiKey, profile.file).getOrThrow()
-    })
+    ): Result<SessionManifest> = transcribeAndBindDetailed(context, store, sessionId, apiKey)
+        .map(SourceSnapshotOperationResult::manifest)
+
+    fun transcribeAndBindDetailed(
+        context: Context,
+        store: TranslationSessionStore,
+        sessionId: String,
+        apiKey: String,
+    ): Result<SourceSnapshotOperationResult> = runDetailed(
+        context = context,
+        store = store,
+        sessionId = sessionId,
+        transcribe = { profile ->
+            NvidiaSttClient.transcribeEnglishSampleDetailed(apiKey, profile.file).getOrThrow()
+        },
+    )
 
     internal fun run(
         context: Context,
@@ -30,7 +67,18 @@ internal object SourceSnapshotOperation {
         capture: (SourceAttachment) -> CapturedSource = { expected ->
             SourceAttachmentBuilder.capture(context, sessionId, expected.contentUri, expected.selectedRange).getOrThrow()
         },
-    ): Result<SessionManifest> = runCatching {
+    ): Result<SessionManifest> = runDetailed(context, store, sessionId, transcribe, capture)
+        .map(SourceSnapshotOperationResult::manifest)
+
+    internal fun runDetailed(
+        context: Context,
+        store: TranslationSessionStore,
+        sessionId: String,
+        transcribe: (SttAudioProfile) -> NvidiaSttTransportObservation,
+        capture: (SourceAttachment) -> CapturedSource = { expected ->
+            SourceAttachmentBuilder.capture(context, sessionId, expected.contentUri, expected.selectedRange).getOrThrow()
+        },
+    ): Result<SourceSnapshotOperationResult> = runCatching {
         val before = store.readManifest(sessionId)
         val expected = requireNotNull(store.readActiveSourceAttachment(sessionId)) {
             "initial snapshot operation requires a bound source attachment"
@@ -49,15 +97,24 @@ internal object SourceSnapshotOperation {
             }
             if (existing == null) {
                 // Pre-journal sessions that already completed remain valid and need no provider work.
-                return@runCatching before
+                return@runCatching SourceSnapshotOperationResult(
+                    manifest = before,
+                    delivery = SourceSnapshotDelivery.ALREADY_BOUND,
+                )
             }
             requireAttemptMatchesBoundSnapshot(existing, before, expected, activeSnapshot)
             when (existing.phase) {
                 SttAttemptPhase.RECEIVED -> {
                     store.markSttAttemptAdopted(existing.copy(phase = SttAttemptPhase.ADOPTED))
-                    return@runCatching before
+                    return@runCatching SourceSnapshotOperationResult(
+                        manifest = before,
+                        delivery = SourceSnapshotDelivery.LOCAL_RECOVERY,
+                    )
                 }
-                SttAttemptPhase.ADOPTED -> return@runCatching before
+                SttAttemptPhase.ADOPTED -> return@runCatching SourceSnapshotOperationResult(
+                    manifest = before,
+                    delivery = SourceSnapshotDelivery.ALREADY_BOUND,
+                )
                 SttAttemptPhase.PREPARED,
                 SttAttemptPhase.SENT,
                 -> error("snapshot-bound manifest has an incomplete STT attempt journal")
@@ -84,7 +141,10 @@ internal object SourceSnapshotOperation {
                     val snapshot = requireNotNull(existing.snapshot)
                     val manifest = store.bindInitialSourceSnapshotIfCurrent(token, snapshot)
                     store.markSttAttemptAdopted(existing.copy(phase = SttAttemptPhase.ADOPTED))
-                    return@runCatching manifest
+                    return@runCatching SourceSnapshotOperationResult(
+                        manifest = manifest,
+                        delivery = SourceSnapshotDelivery.LOCAL_RECOVERY,
+                    )
                 }
                 SttAttemptPhase.ADOPTED -> error("ADOPTED STT attempt without snapshot-bound manifest")
                 SttAttemptPhase.PREPARED -> Unit // No submission happened; safe to rebuild local evidence/profile.
@@ -127,7 +187,11 @@ internal object SourceSnapshotOperation {
             // even if that fence is now stale, so the result is evidence rather than a lost response.
             val manifest = store.bindInitialSourceSnapshotIfCurrent(token, snapshot)
             store.markSttAttemptAdopted(received.copy(phase = SttAttemptPhase.ADOPTED))
-            manifest
+            SourceSnapshotOperationResult(
+                manifest = manifest,
+                delivery = SourceSnapshotDelivery.LIVE_PROVIDER,
+                legacyResult = observation.result,
+            )
         }
     }
 
