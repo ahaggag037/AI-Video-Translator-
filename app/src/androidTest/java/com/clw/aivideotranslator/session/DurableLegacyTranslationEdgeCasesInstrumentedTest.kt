@@ -17,7 +17,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class DurableLegacyTranslationEdgeCasesInstrumentedTest {
-    private fun withStore(block: (TranslationSessionStore, TranslationRequestPlanStore) -> Unit) {
+    private fun withStore(block: (File, TranslationSessionStore, TranslationRequestPlanStore) -> Unit) {
         val root = File(
             InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,
             "durable-translation-edge-${UUID.randomUUID()}",
@@ -25,7 +25,7 @@ class DurableLegacyTranslationEdgeCasesInstrumentedTest {
         try {
             val store = TranslationSessionStore(root)
             store.createSession("session-1")
-            block(store, TranslationRequestPlanStore(root) { store.readManifest(it); Unit })
+            block(root, store, TranslationRequestPlanStore(root) { store.readManifest(it); Unit })
         } finally {
             root.deleteRecursively()
         }
@@ -49,7 +49,7 @@ class DurableLegacyTranslationEdgeCasesInstrumentedTest {
         candidateText = "مرحبًا بالعالم.",
     )
 
-    @Test fun durablePreparedReopenSubmitsExactlyOnce() = withStore { store, planStore ->
+    @Test fun durablePreparedReopenSubmitsExactlyOnce() = withStore { _, store, planStore ->
         val unit = unit()
         planStore.publish("session-1", unit.requestPlan)
         val manifest = store.readManifest("session-1")
@@ -79,7 +79,7 @@ class DurableLegacyTranslationEdgeCasesInstrumentedTest {
         assertEquals(RequestReceiptPhase.RECEIVED, store.readReceipt("session-1", "attempt-prepared").phase)
     }
 
-    @Test fun structuredCancellationStaysSentAndReopenDoesNotPostAgain() = withStore { store, planStore ->
+    @Test fun structuredCancellationStaysSentAndReopenDoesNotPostAgain() = withStore { _, store, planStore ->
         val unit = unit()
         var submitCount = 0
         val first = runBlocking {
@@ -104,5 +104,47 @@ class DurableLegacyTranslationEdgeCasesInstrumentedTest {
         }
         assertEquals(1, submitCount)
         assertEquals(DurableTranslationUnitDisposition.UNKNOWN_REMOTE_OUTCOME, reopened.units.single().disposition)
+    }
+
+    @Test fun receivedAttemptResumesFromPersistedPlanAfterProcessDeathWithoutLegacyTiming() = withStore { root, store, planStore ->
+        val unit = unit()
+        planStore.publish("session-1", unit.requestPlan)
+        val manifest = store.readManifest("session-1")
+        val prepared = store.writeReceipt(
+            RequestReceipt(
+                attemptId = "attempt-received-restart",
+                sessionId = "session-1",
+                unitId = unit.requestPlan.unitId,
+                epoch = manifest.epoch,
+                requestSignature = unit.requestPlan.requestSignature,
+                expectedManifestRevision = manifest.revision,
+                expectedActiveEntryRevisionId = null,
+                phase = RequestReceiptPhase.PREPARED,
+            )
+        )
+        val sent = store.markSentIfCurrent(prepared.copy(phase = RequestReceiptPhase.SENT))
+        store.writeReceipt(sent.copy(phase = RequestReceiptPhase.RECEIVED, outcome = candidate()))
+
+        // Simulate a fresh process: no NvidiaSttResult/SourceUnit object is carried across this fence.
+        val reopenedStore = TranslationSessionStore(root)
+        val reopenedPlanStore = TranslationRequestPlanStore(root) { reopenedStore.readManifest(it); Unit }
+        var submitCount = 0
+        val result = runBlocking {
+            DurableLegacyTranslationOperation(reopenedStore, reopenedPlanStore).resumeAttempt(
+                sessionId = "session-1",
+                attemptId = "attempt-received-restart",
+            ) {
+                submitCount++
+                error("RECEIVED restart must adopt from durable plan without provider POST")
+            }.getOrThrow()
+        }
+
+        assertEquals(0, submitCount)
+        assertEquals(DurableTranslationUnitDisposition.ADOPTED, result.disposition)
+        assertEquals("مرحبًا بالعالم.", result.effectiveText)
+        assertEquals(
+            "مرحبًا بالعالم.",
+            reopenedStore.readActiveEntry("session-1", unit.requestPlan.unitId)!!.record.effectiveText(),
+        )
     }
 }
