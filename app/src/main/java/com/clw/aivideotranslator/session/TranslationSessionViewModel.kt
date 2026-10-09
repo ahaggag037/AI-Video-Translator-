@@ -703,7 +703,12 @@ internal class TranslationSessionViewModel(
                     val active = requireNotNull(store.readActiveEntry(sessionId, unitId)) {
                         "active translation entry missing during restore"
                     }
-                    TranslationEntry(unitId, active.record.effectiveText())
+                    TranslationEntry(
+                        unitId,
+                        requireNotNull(active.record.effectiveText()) {
+                            "active translation entry has no effective text"
+                        },
+                    )
                 }
 
                 when {
