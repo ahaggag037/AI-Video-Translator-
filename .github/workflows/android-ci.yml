@@ -29,6 +29,19 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
+      - name: Verify unsigned release fails closed
+        run: |
+          set +e
+          gradle --stacktrace :app:assembleRelease > unsigned-release.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Unsigned release unexpectedly succeeded"
+            cat unsigned-release.log
+            exit 1
+          fi
+          grep -q "Release signing is not configured" unsigned-release.log
+
       - name: Unit tests
         run: gradle --stacktrace testDebugUnitTest
 
