@@ -2,6 +2,7 @@ package com.clw.aivideotranslator.session
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -82,6 +83,17 @@ class TranslationSessionControllerTest {
         assertEquals(SessionBlocker.STT_UNKNOWN_REMOTE_OUTCOME, result.blocker)
     }
 
+    @Test fun unadoptedReceivedStateIsNotReportedReady() = runBlocking {
+        val controller = TranslationSessionController(FakeOwner("session-a")) {
+            assessment(stt = SttReopenDisposition.RECEIVED_AVAILABLE)
+        }
+
+        val result = controller.resumeActiveSession()
+
+        assertEquals(SessionControllerPhase.BLOCKED, result.phase)
+        assertEquals(SessionBlocker.STT_LOCAL_RECOVERY_REQUIRED, result.blocker)
+    }
+
     @Test fun activateUsesExactPointerCasBeforeReopen() = runBlocking {
         val owner = FakeOwner("session-a")
         var reopened: String? = null
@@ -148,6 +160,24 @@ class TranslationSessionControllerTest {
         release.complete(Unit)
         assertEquals(initial, late.await())
         assertEquals(initial, controller.state.value)
+    }
+
+    @Test fun coroutineCancellationPropagatesAndDoesNotPublishFailure() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val controller = TranslationSessionController(FakeOwner("session-a")) {
+            started.complete(Unit)
+            awaitCancellation()
+        }
+
+        val opening = async { controller.resumeActiveSession() }
+        started.await()
+        controller.cancelCurrent()
+        opening.cancel()
+        runCatching { opening.await() }
+
+        assertTrue(opening.isCancelled)
+        assertEquals(SessionControllerPhase.IDLE, controller.state.value.phase)
+        assertNull(controller.state.value.failure)
     }
 
     @Test fun reopenAndPointerFailuresAreTypedWithoutRawExceptionLeakage() = runBlocking {
