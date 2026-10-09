@@ -148,10 +148,14 @@ class RenderSnapshotFactory(
             digest.update(bytes)
         }
 
+        val rect = geometry.videoContentRect
         field(VERSION)
         field(geometry.uprightWidthPx.toString())
         field(geometry.uprightHeightPx.toString())
-        field(geometry.videoContentRect.toString())
+        field(rect.left.toString())
+        field(rect.top.toString())
+        field(rect.right.toString())
+        field(rect.bottom.toString())
         field(fontProfile.profileId)
         field(fontProfile.assetSha256)
         field(fontProfile.weight.toString())
