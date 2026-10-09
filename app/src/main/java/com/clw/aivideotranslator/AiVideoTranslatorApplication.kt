@@ -3,6 +3,7 @@ package com.clw.aivideotranslator
 import android.app.Application
 import com.clw.aivideotranslator.session.ActiveSessionRegistry
 import com.clw.aivideotranslator.session.SessionManifest
+import com.clw.aivideotranslator.session.TranslationRequestPlanStore
 import com.clw.aivideotranslator.session.TranslationSessionStore
 import java.io.File
 import java.util.UUID
@@ -19,6 +20,13 @@ class AiVideoTranslatorApplication : Application() {
 
     internal val translationSessions: TranslationSessionStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         TranslationSessionStore(translationSessionRoot)
+    }
+
+    internal val translationRequestPlans: TranslationRequestPlanStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        TranslationRequestPlanStore(
+            sessionsRoot = translationSessionRoot,
+            validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
+        )
     }
 
     internal val activeTranslationSession: ActiveSessionRegistry by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {

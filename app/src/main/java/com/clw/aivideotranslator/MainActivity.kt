@@ -34,7 +34,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,6 +49,7 @@ import com.clw.aivideotranslator.session.DurableSourcePhase
 import com.clw.aivideotranslator.session.DurableSourceUiState
 import com.clw.aivideotranslator.session.DurableSttPhase
 import com.clw.aivideotranslator.session.DurableSttUiState
+import com.clw.aivideotranslator.session.DurableTranslationPhase
 import com.clw.aivideotranslator.session.TranslationSessionViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -66,6 +66,7 @@ class MainActivity : ComponentActivity() {
                 context = this,
                 activeSessionOwner = app.activeTranslationSession,
                 store = app.translationSessions,
+                planStore = app.translationRequestPlans,
             ),
         )[TranslationSessionViewModel::class.java]
         setContent { App(sessionViewModel) }
@@ -97,6 +98,7 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
     val scope = rememberCoroutineScope()
     val durableSource by sessionViewModel.durableSource.collectAsState()
     val durableStt by sessionViewModel.stt.collectAsState()
+    val durableTranslation by sessionViewModel.translation.collectAsState()
     var state: HomeState by remember { mutableStateOf(HomeState.Empty) }
     var player: MediaPlayer? by remember { mutableStateOf(null) }
     var nvidiaApiKey by remember { mutableStateOf("") }
@@ -217,13 +219,14 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "اختيار الفيديو ونتيجة STT المقبولة أصبحا مرتبطين بجلسة دائمة. لا يُعاد إرسال طلب STT الناجح تلقائيًا بعد إغلاق التطبيق."
+                    "اختيار الفيديو وSTT والترجمة المقبولة مرتبطة الآن بجلسة دائمة. الطلبات غير المؤكدة لا يعاد إرسالها تلقائيًا بعد إغلاق التطبيق."
                 )
 
                 Button(
                     onClick = { picker.launch(arrayOf("video/*")) },
                     enabled = durableSource.phase != DurableSourcePhase.CAPTURING &&
                         durableStt.phase != DurableSttPhase.RUNNING &&
+                        durableTranslation.phase != DurableTranslationPhase.RUNNING &&
                         ((state as? HomeState.Ready)?.sampleState !is SampleState.Extracting),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -243,29 +246,34 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
                             onExtract = { extractSample(s) },
                             onPlay = ::playSample,
                         )
+                        val sourceReady = durableSource.phase == DurableSourcePhase.BOUND &&
+                            durableSource.contentUri == s.uri.toString()
                         SttCard(
                             state = durableStt,
                             apiKey = nvidiaApiKey,
-                            sourceReady = durableSource.phase == DurableSourcePhase.BOUND &&
-                                durableSource.contentUri == s.uri.toString(),
+                            sourceReady = sourceReady,
                             onApiKeyChange = { nvidiaApiKey = it },
                             onRun = { runNvidiaStt(s) },
                         )
-                        val liveResult = durableStt.legacyResult
-                        if (durableStt.phase == DurableSttPhase.LIVE_SUCCESS && liveResult != null) {
-                            key(liveResult) {
-                                TranslationCard(
-                                    result = liveResult,
-                                    apiKey = nvidiaApiKey,
-                                    sourceUri = s.uri,
-                                    videoDurationMs = s.metadata.durationMs ?: SubtitlePipeline.SAMPLE_END_MS,
-                                    sampleStartMs = 0L,
-                                )
-                            }
-                        } else if (durableStt.phase == DurableSttPhase.RECOVERED) {
+
+                        val liveSttReady = durableStt.phase == DurableSttPhase.LIVE_SUCCESS &&
+                            durableStt.legacyResult != null && sourceReady
+                        if (liveSttReady || durableTranslation.phase != DurableTranslationPhase.IDLE) {
+                            DurableTranslationCard(
+                                state = durableTranslation,
+                                apiKey = nvidiaApiKey,
+                                canTranslate = liveSttReady,
+                                onTranslate = { sessionViewModel.runTranslation(nvidiaApiKey.trim()) },
+                                sourceUri = s.uri,
+                                videoDurationMs = s.metadata.durationMs ?: SubtitlePipeline.SAMPLE_END_MS,
+                                sampleStartMs = 0L,
+                            )
+                        }
+
+                        if (durableStt.phase == DurableSttPhase.RECOVERED) {
                             InfoCard(
                                 "تم استرداد STT",
-                                "تم استرداد النص المقبول دون طلب جديد. لن نعيد إنشاء توقيت كلمات قديم من التخمين؛ ميزات الترجمة المرتبطة بالتوقيت ستُفعّل بعد اكتمال عقد الساعة الموثّق.",
+                                "تم استرداد النص المقبول دون طلب جديد. إذا وُجدت ترجمات محفوظة فستظهر كنص فقط؛ لن نعيد إنشاء توقيت كلمات قديم من التخمين قبل إغلاق X001.",
                             )
                         }
                     }
@@ -273,7 +281,7 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
 
                 InfoCard(
                     "الخصوصية والاسترداد",
-                    "مفتاح NVIDIA يبقى في ذاكرة الشاشة فقط ولا يُكتب إلى ملفات الجلسة. تحفظ الجلسة هويات المصدر والنتيجة المقبولة اللازمة للاسترداد، لا الاستجابة الخام من المزود.",
+                    "مفتاح NVIDIA يبقى في ذاكرة الشاشة فقط ولا يُكتب إلى ملفات الجلسة. تحفظ الجلسة هويات المصدر ونتائج STT وخطط/نتائج الترجمة اللازمة للاسترداد، لا الاستجابات الخام من المزود."
                 )
             }
         }
