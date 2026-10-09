@@ -1,12 +1,22 @@
 package com.clw.aivideotranslator
 
+import com.clw.aivideotranslator.media.CanonicalVideoFrame
+import com.clw.aivideotranslator.media.FrameGeometryResolver
+
 data class VideoMetadata(
     val displayName: String,
     val durationMs: Long?,
     val width: Int?,
     val height: Int?,
-    val sizeBytes: Long?
+    val sizeBytes: Long?,
+    val rotationDegrees: Int = 0,
 ) {
+    init {
+        require(rotationDegrees in setOf(0, 90, 180, 270)) { "unsupported video rotation" }
+        require((width == null) == (height == null)) { "video dimensions must be both known or both absent" }
+        require(width == null || (width > 0 && height!! > 0)) { "video dimensions must be positive" }
+    }
+
     val durationLabel: String
         get() = durationMs?.let(::formatDuration) ?: "غير معروف"
 
@@ -15,6 +25,17 @@ data class VideoMetadata(
 
     val sizeLabel: String
         get() = sizeBytes?.let(::formatBytes) ?: "غير معروف"
+
+    /** Encoded geometry plus metadata rotation; no preview/view scaling is inferred here. */
+    fun canonicalFrameOrNull(): CanonicalVideoFrame? {
+        val encodedWidth = width ?: return null
+        val encodedHeight = height ?: return null
+        return FrameGeometryResolver.canonical(
+            encodedWidthPx = encodedWidth,
+            encodedHeightPx = encodedHeight,
+            rotationDegrees = rotationDegrees,
+        )
+    }
 }
 
 internal fun formatDuration(durationMs: Long): String {
