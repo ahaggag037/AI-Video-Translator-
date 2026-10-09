@@ -8,6 +8,11 @@ import org.json.JSONObject
 
 private const val ACTIVE_SESSION_SCHEMA_VERSION = 1
 
+internal interface ActiveSessionOwner {
+    fun readActiveSessionId(): String?
+    fun activateSession(sessionId: String, expectedActiveSessionId: String?): String
+}
+
 internal data class ActiveSessionPointer(
     val schemaVersion: Int = ACTIVE_SESSION_SCHEMA_VERSION,
     val sessionId: String,
@@ -56,7 +61,7 @@ internal class ActiveSessionRegistry(
     private val sessionsRoot: File,
     private val validateSession: (String) -> Unit,
     private val afterPayloadWritten: (File) -> Unit = {},
-) {
+) : ActiveSessionOwner {
     private val writerLock = Any()
     private val pointerFile = File(sessionsRoot, "active_session.json")
 
@@ -64,11 +69,11 @@ internal class ActiveSessionRegistry(
         require(sessionsRoot.mkdirs() || sessionsRoot.isDirectory) { "cannot create session root" }
     }
 
-    fun readActiveSessionId(): String? = synchronized(writerLock) {
+    override fun readActiveSessionId(): String? = synchronized(writerLock) {
         readPointerUnlocked(validateTarget = true)?.sessionId
     }
 
-    fun activateSession(sessionId: String, expectedActiveSessionId: String?): String = synchronized(writerLock) {
+    override fun activateSession(sessionId: String, expectedActiveSessionId: String?): String = synchronized(writerLock) {
         require(isSafeId(sessionId)) { "invalid active session id" }
         require(expectedActiveSessionId == null || isSafeId(expectedActiveSessionId)) {
             "invalid expected active session id"
