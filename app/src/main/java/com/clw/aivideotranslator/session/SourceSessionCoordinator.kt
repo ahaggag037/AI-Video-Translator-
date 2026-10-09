@@ -86,5 +86,121 @@ internal object SourceSessionCoordinator {
         val manifestAfter = store.readManifest(sessionId)
         SourceResumeEvaluator.evaluate(manifestAfter, attachment, observation)
     }
-}
 
+    /**
+     * Full local reopen composition required before controller/UI ownership can activate.
+     *
+     * A SNAPSHOT_BOUND session validates its immutable snapshot locally before any source/provider
+     * I/O. Corrupt/missing/oversized/identity-mismatched snapshots therefore fail closed without a
+     * probe. A valid snapshot is re-read after the blocking source probe so same-ref file tampering
+     * cannot be mixed with a pre-I/O snapshot. No timing gate is changed: an UNVERIFIED snapshot is
+     * returned as UNVERIFIED semantic evidence, never promoted to a verified clock.
+     */
+    fun assessSessionReopen(
+        resolver: ContentResolver,
+        store: TranslationSessionStore,
+        sessionId: String,
+    ): Result<SessionReopenAssessment> = assessSessionReopen(store, sessionId) { token, attachment ->
+        SourceContentProbe.probe(resolver, token, attachment)
+    }
+
+    internal fun assessSessionReopen(
+        store: TranslationSessionStore,
+        sessionId: String,
+        probe: (SourceProbeToken, SourceAttachment) -> SourceReadObservation,
+    ): Result<SessionReopenAssessment> = runCatching {
+        val beforeInputs = store.readSourceResumeInputs(sessionId)
+        val before = beforeInputs.manifest
+        val attachmentBefore = beforeInputs.attachment
+        val snapshotBefore = if (before.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
+            readSnapshotForReopen(store, sessionId)
+        } else null
+
+        if (before.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND && snapshotBefore == null) {
+            return@runCatching SessionReopenAssessment(
+                source = SourceResumeEvaluator.evaluate(before, attachmentBefore, null),
+                snapshotAvailability = SourceSnapshotAvailability.CORRUPT_BINDING,
+            )
+        }
+
+        if (attachmentBefore == null) {
+            return@runCatching SessionReopenAssessment(
+                source = SourceResumeEvaluator.evaluate(before, null, null),
+                snapshotAvailability = if (before.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
+                    SourceSnapshotAvailability.CORRUPT_BINDING
+                } else SourceSnapshotAvailability.NOT_BOUND,
+            )
+        }
+
+        if (before.sourceBindingState == SourceBindingState.UNBOUND ||
+            before.sourceBindingState == SourceBindingState.LEGACY_UNBOUND) {
+            return@runCatching SessionReopenAssessment(
+                source = SourceResumeEvaluator.evaluate(before, attachmentBefore, null),
+                snapshotAvailability = SourceSnapshotAvailability.NOT_BOUND,
+            )
+        }
+
+        val token = SourceProbeToken.from(before)
+        val observation = probe(token, attachmentBefore)
+        val afterInputs = store.readSourceResumeInputs(sessionId)
+        val after = afterInputs.manifest
+
+        if (SourceBindingToken.from(after) != SourceBindingToken.from(before)) {
+            return@runCatching SessionReopenAssessment(
+                source = SourceResumeAssessment(SourceAvailability.STALE_OBSERVATION),
+                snapshotAvailability = if (before.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
+                    SourceSnapshotAvailability.STALE_OBSERVATION
+                } else SourceSnapshotAvailability.NOT_BOUND,
+            )
+        }
+
+        val attachmentAfter = afterInputs.attachment
+        if (attachmentAfter == null || attachmentAfter != attachmentBefore) {
+            return@runCatching SessionReopenAssessment(
+                source = SourceResumeEvaluator.evaluate(after, attachmentAfter, observation),
+                snapshotAvailability = if (after.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
+                    SourceSnapshotAvailability.CORRUPT_BINDING
+                } else SourceSnapshotAvailability.NOT_BOUND,
+            )
+        }
+
+        val sourceAssessment = SourceResumeEvaluator.evaluate(after, attachmentAfter, observation)
+        if (after.sourceBindingState != SourceBindingState.SNAPSHOT_BOUND) {
+            return@runCatching SessionReopenAssessment(
+                source = sourceAssessment,
+                snapshotAvailability = SourceSnapshotAvailability.NOT_BOUND,
+            )
+        }
+
+        val snapshotAfter = readSnapshotForReopen(store, sessionId)
+        if (snapshotAfter == null || snapshotAfter != snapshotBefore) {
+            return@runCatching SessionReopenAssessment(
+                source = sourceAssessment,
+                snapshotAvailability = SourceSnapshotAvailability.CORRUPT_BINDING,
+            )
+        }
+
+        SessionReopenAssessment(
+            source = sourceAssessment,
+            snapshotAvailability = SourceSnapshotAvailability.AVAILABLE,
+            snapshot = snapshotAfter,
+        )
+    }
+
+    private fun readSnapshotForReopen(
+        store: TranslationSessionStore,
+        sessionId: String,
+    ): SourceSnapshot? = try {
+        store.readActiveSourceSnapshot(sessionId)
+    } catch (error: Exception) {
+        when (error) {
+            is java.io.IOException,
+            is SecurityException,
+            is IllegalArgumentException,
+            is org.json.JSONException,
+            is ArithmeticException,
+            -> null
+            else -> throw error
+        }
+    }
+}
