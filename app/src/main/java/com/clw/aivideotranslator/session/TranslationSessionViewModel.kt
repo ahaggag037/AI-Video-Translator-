@@ -248,62 +248,71 @@ internal class TranslationSessionViewModel(
             return
         }
         val generation = sourceGeneration.get()
-        if (!launchExclusive {
-            mutableStt.value = DurableSttUiState(DurableSttPhase.RUNNING, sessionId = sessionId)
-            val outcome = runCatching {
-                withContext(Dispatchers.IO) {
-                    check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed before STT" }
-                    requireCurrentSourceGeneration(generation)
-                    val result = sttRunner.run(appContext, store, sessionId, apiKey).getOrThrow()
-                    requireCurrentSourceGeneration(generation)
-                    check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed after STT" }
-                    val snapshot = store.readActiveSourceSnapshot(sessionId)
-                    Pair(result, snapshot)
+        // The exclusive-operation gate must be evaluated on the ViewModel dispatcher, not on this
+        // caller thread. BOUND is published from inside the still-running source-binding coroutine,
+        // whose completion (which releases activeJob) is only queued behind that publication on the
+        // main dispatcher. Gating on the caller thread raced with that completion bookkeeping and
+        // could silently drop the STT attempt, leaving `stt` in IDLE forever — observed as the 30s
+        // API35 timeout in liveSttResultIsPublishedFromOneRunnerInvocationAndSameDurableSnapshot.
+        scope.launch {
+            if (sourceGeneration.get() != generation) return@launch
+            // A genuinely active operation (e.g. a duplicate STT tap) still owns the ViewModel;
+            // refuse exactly as the previous caller-thread gate did.
+            if (!launchExclusive {
+                mutableStt.value = DurableSttUiState(DurableSttPhase.RUNNING, sessionId = sessionId)
+                val outcome = runCatching {
+                    withContext(Dispatchers.IO) {
+                        check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed before STT" }
+                        requireCurrentSourceGeneration(generation)
+                        val result = sttRunner.run(appContext, store, sessionId, apiKey).getOrThrow()
+                        requireCurrentSourceGeneration(generation)
+                        check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed after STT" }
+                        val snapshot = store.readActiveSourceSnapshot(sessionId)
+                        Pair(result, snapshot)
+                    }
                 }
-            }
-            if (sourceGeneration.get() != generation) return@launchExclusive
-            outcome.fold(
-                onSuccess = { (result, snapshot) ->
-                    when (result.delivery) {
-                        SourceSnapshotDelivery.LIVE_PROVIDER -> {
-                            val legacy = requireNotNull(result.legacyResult)
-                            mutableStt.value = DurableSttUiState(
-                                phase = DurableSttPhase.LIVE_SUCCESS,
+                if (sourceGeneration.get() != generation) return@launchExclusive
+                outcome.fold(
+                    onSuccess = { (result, snapshot) ->
+                        when (result.delivery) {
+                            SourceSnapshotDelivery.LIVE_PROVIDER -> {
+                                val legacy = requireNotNull(result.legacyResult)
+                                mutableStt.value = DurableSttUiState(
+                                    phase = DurableSttPhase.LIVE_SUCCESS,
+                                    sessionId = sessionId,
+                                    transcript = legacy.transcript,
+                                    legacyResult = legacy,
+                                )
+                            }
+                            SourceSnapshotDelivery.LOCAL_RECOVERY,
+                            SourceSnapshotDelivery.ALREADY_BOUND,
+                            -> {
+                                val transcript = requireNotNull(snapshot).transcript
+                                mutableStt.value = DurableSttUiState(
+                                    phase = DurableSttPhase.RECOVERED,
+                                    sessionId = sessionId,
+                                    transcript = transcript,
+                                )
+                            }
+                        }
+                    },
+                    onFailure = { error ->
+                        if (error is CancellationException) return@fold
+                        mutableStt.value = if (error is UnknownSttRemoteOutcomeException) {
+                            DurableSttUiState(
+                                phase = DurableSttPhase.UNKNOWN_REMOTE_OUTCOME,
                                 sessionId = sessionId,
-                                transcript = legacy.transcript,
-                                legacyResult = legacy,
+                            )
+                        } else {
+                            DurableSttUiState(
+                                phase = DurableSttPhase.FAILED,
+                                sessionId = sessionId,
+                                failure = DurableSttFailure.PROVIDER_OR_STORAGE,
                             )
                         }
-                        SourceSnapshotDelivery.LOCAL_RECOVERY,
-                        SourceSnapshotDelivery.ALREADY_BOUND,
-                        -> {
-                            val transcript = requireNotNull(snapshot).transcript
-                            mutableStt.value = DurableSttUiState(
-                                phase = DurableSttPhase.RECOVERED,
-                                sessionId = sessionId,
-                                transcript = transcript,
-                            )
-                        }
-                    }
-                },
-                onFailure = { error ->
-                    if (error is CancellationException) return@fold
-                    mutableStt.value = if (error is UnknownSttRemoteOutcomeException) {
-                        DurableSttUiState(
-                            phase = DurableSttPhase.UNKNOWN_REMOTE_OUTCOME,
-                            sessionId = sessionId,
-                        )
-                    } else {
-                        DurableSttUiState(
-                            phase = DurableSttPhase.FAILED,
-                            sessionId = sessionId,
-                            failure = DurableSttFailure.PROVIDER_OR_STORAGE,
-                        )
-                    }
-                },
-            )
-        }) {
-            return
+                    },
+                )
+            }) return@launch
         }
     }
 
