@@ -33,7 +33,8 @@ object ReceiptRecoveryPlanner {
         if (
             requestPlan.unitId != receipt.unitId ||
             requestPlan.requestSignature != receipt.requestSignature ||
-            !TranslationPlanner.isRequestPlanSelfConsistent(requestPlan)
+            !TranslationPlanner.isRequestPlanSelfConsistent(requestPlan) ||
+            !LegacyParityTranslationPlanner.isLegacyAcceptanceSignatureValid(requestPlan)
         ) {
             return ReceiptRecoveryPlan(
                 ReceiptRecoveryAction.STALE_RECEIPT,
@@ -84,8 +85,9 @@ object ReceiptRecoveryPlanner {
                 val candidate = requireNotNull(outcome.candidateText)
                 val validation = TranslationValidator.validate(sourceText, candidate)
                 val action = when (validation.state) {
-                    TranslationValidationState.PASS -> ReceiptRecoveryAction.READY_TO_ADOPT
+                    TranslationValidationState.PASS,
                     TranslationValidationState.PASS_WITH_WARNING,
+                    -> ReceiptRecoveryAction.READY_TO_ADOPT
                     TranslationValidationState.REVIEW_REQUIRED -> ReceiptRecoveryAction.REVIEW_CANDIDATE
                     TranslationValidationState.NON_RETRYABLE_FAILURE -> ReceiptRecoveryAction.REJECT_CANDIDATE
                 }
