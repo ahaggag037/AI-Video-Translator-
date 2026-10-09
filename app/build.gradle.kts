@@ -3,6 +3,21 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseStoreFilePath = providers.gradleProperty("AI_TRANSLATOR_RELEASE_STORE_FILE")
+    .orElse(providers.environmentVariable("AI_TRANSLATOR_RELEASE_STORE_FILE"))
+val releaseStorePassword = providers.gradleProperty("AI_TRANSLATOR_RELEASE_STORE_PASSWORD")
+    .orElse(providers.environmentVariable("AI_TRANSLATOR_RELEASE_STORE_PASSWORD"))
+val releaseKeyAlias = providers.gradleProperty("AI_TRANSLATOR_RELEASE_KEY_ALIAS")
+    .orElse(providers.environmentVariable("AI_TRANSLATOR_RELEASE_KEY_ALIAS"))
+val releaseKeyPassword = providers.gradleProperty("AI_TRANSLATOR_RELEASE_KEY_PASSWORD")
+    .orElse(providers.environmentVariable("AI_TRANSLATOR_RELEASE_KEY_PASSWORD"))
+val releaseSigningConfigured = listOf(
+    releaseStoreFilePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it.isPresent }
+
 android {
     namespace = "com.clw.aivideotranslator"
     compileSdk = 36
@@ -22,9 +37,23 @@ android {
         buildConfig = true
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFilePath.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -35,6 +64,20 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+tasks.register("verifyReleaseSigningReady") {
+    group = "verification"
+    description = "Fails unless all release-signing inputs are configured and the keystore exists."
+    doLast {
+        check(releaseSigningConfigured) {
+            "Release signing is not configured. Set AI_TRANSLATOR_RELEASE_STORE_FILE, " +
+                "AI_TRANSLATOR_RELEASE_STORE_PASSWORD, AI_TRANSLATOR_RELEASE_KEY_ALIAS, and " +
+                "AI_TRANSLATOR_RELEASE_KEY_PASSWORD as Gradle properties or environment variables."
+        }
+        val keystore = rootProject.file(releaseStoreFilePath.get())
+        check(keystore.isFile) { "Configured release keystore does not exist: ${keystore.absolutePath}" }
     }
 }
 
