@@ -35,6 +35,24 @@ class SessionApplicationOwnerInstrumentedTest {
         } finally { executor.shutdownNow() }
     }
 
+    @Test fun concurrentCallersShareTheApplicationRequestPlanStore() {
+        val app = application()
+        val executor = Executors.newFixedThreadPool(4)
+        val start = CountDownLatch(1)
+        try {
+            val results = (1..4).map {
+                executor.submit(Callable {
+                    check(start.await(10, TimeUnit.SECONDS))
+                    app.translationRequestPlans
+                })
+            }
+            start.countDown()
+            val stores = results.map { it.get(10, TimeUnit.SECONDS) }
+            stores.forEach { assertSame(stores.first(), it) }
+            assertSame(app.translationRequestPlans, stores.first())
+        } finally { executor.shutdownNow() }
+    }
+
     @Test fun explicitCreationUsesUniquePrivateNonBackupSessionsWithoutSourceActivation() {
         val app = application()
         val created = mutableListOf<SessionManifest>()
