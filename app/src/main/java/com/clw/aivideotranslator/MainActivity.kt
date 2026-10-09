@@ -50,6 +50,8 @@ import com.clw.aivideotranslator.session.DurableSourcePhase
 import com.clw.aivideotranslator.session.DurableSourceUiState
 import com.clw.aivideotranslator.session.DurableSttPhase
 import com.clw.aivideotranslator.session.DurableSttUiState
+import com.clw.aivideotranslator.session.DurableTranslationPhase
+import com.clw.aivideotranslator.session.DurableTranslationUiState
 import com.clw.aivideotranslator.session.TranslationSessionViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -66,6 +68,7 @@ class MainActivity : ComponentActivity() {
                 context = this,
                 activeSessionOwner = app.activeTranslationSession,
                 store = app.translationSessions,
+                planStore = app.translationRequestPlans,
             ),
         )[TranslationSessionViewModel::class.java]
         setContent { App(sessionViewModel) }
@@ -97,6 +100,7 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
     val scope = rememberCoroutineScope()
     val durableSource by sessionViewModel.durableSource.collectAsState()
     val durableStt by sessionViewModel.stt.collectAsState()
+    val durableTranslation by sessionViewModel.translation.collectAsState()
     var state: HomeState by remember { mutableStateOf(HomeState.Empty) }
     var player: MediaPlayer? by remember { mutableStateOf(null) }
     var nvidiaApiKey by remember { mutableStateOf("") }
@@ -179,6 +183,15 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
         sessionViewModel.runStt(apiKeySnapshot)
     }
 
+    fun runNvidiaTranslation() {
+        val apiKeySnapshot = nvidiaApiKey.trim()
+        if (apiKeySnapshot.isEmpty()) {
+            Toast.makeText(context, "أدخل NVIDIA API Key أولًا", Toast.LENGTH_SHORT).show()
+            return
+        }
+        sessionViewModel.runTranslation(apiKeySnapshot)
+    }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         player?.release()
@@ -217,20 +230,21 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "اختيار الفيديو ونتيجة STT المقبولة أصبحا مرتبطين بجلسة دائمة. لا يُعاد إرسال طلب STT الناجح تلقائيًا بعد إغلاق التطبيق."
+                    "اختيار الفيديو ونتيجة STT ونصوص الترجمة المقبولة مرتبطة بجلسة دائمة. الطلبات غير المحسومة لا تُعاد تلقائيًا بعد إغلاق التطبيق."
                 )
 
                 Button(
                     onClick = { picker.launch(arrayOf("video/*")) },
                     enabled = durableSource.phase != DurableSourcePhase.CAPTURING &&
                         durableStt.phase != DurableSttPhase.RUNNING &&
+                        durableTranslation.phase != DurableTranslationPhase.RUNNING &&
                         ((state as? HomeState.Ready)?.sampleState !is SampleState.Extracting),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("اختيار فيديو")
                 }
 
-                DurableSessionCard(durableSource, durableStt)
+                DurableSessionCard(durableSource, durableStt, durableTranslation)
 
                 when (val s = state) {
                     HomeState.Empty -> InfoCard("الحالة", "اختر فيديو لبدء جلسة جديدة، أو انتظر استرداد الجلسة السابقة إن وجدت.")
@@ -256,24 +270,28 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
                             key(liveResult) {
                                 TranslationCard(
                                     result = liveResult,
-                                    apiKey = nvidiaApiKey,
+                                    translationState = durableTranslation,
+                                    canTranslate = nvidiaApiKey.isNotBlank(),
+                                    onTranslate = ::runNvidiaTranslation,
                                     sourceUri = s.uri,
                                     videoDurationMs = s.metadata.durationMs ?: SubtitlePipeline.SAMPLE_END_MS,
                                     sampleStartMs = 0L,
                                 )
                             }
                         } else if (durableStt.phase == DurableSttPhase.RECOVERED) {
-                            InfoCard(
-                                "تم استرداد STT",
-                                "تم استرداد النص المقبول دون طلب جديد. لن نعيد إنشاء توقيت كلمات قديم من التخمين؛ ميزات الترجمة المرتبطة بالتوقيت ستُفعّل بعد اكتمال عقد الساعة الموثّق.",
-                            )
+                            val body = if (durableTranslation.phase == DurableTranslationPhase.COMPLETE) {
+                                "تم استرداد STT والترجمة المقبولة من الجلسة دون طلب جديد. النصوص محفوظة، لكن المعاينة المرتبطة بتوقيت الكلمات لن تُعاد من التخمين قبل اكتمال عقد الساعة الموثّق."
+                            } else {
+                                "تم استرداد النص المقبول دون طلب جديد. لن نعيد إنشاء توقيت كلمات قديم من التخمين؛ ميزات الترجمة المرتبطة بالتوقيت ستُفعّل بعد اكتمال عقد الساعة الموثّق."
+                            }
+                            InfoCard("تم استرداد STT", body)
                         }
                     }
                 }
 
                 InfoCard(
                     "الخصوصية والاسترداد",
-                    "مفتاح NVIDIA يبقى في ذاكرة الشاشة فقط ولا يُكتب إلى ملفات الجلسة. تحفظ الجلسة هويات المصدر والنتيجة المقبولة اللازمة للاسترداد، لا الاستجابة الخام من المزود.",
+                    "مفتاح NVIDIA يبقى في ذاكرة الشاشة فقط ولا يُكتب إلى ملفات الجلسة. تحفظ الجلسة هويات المصدر وخطط الطلب والنتائج المقبولة اللازمة للاسترداد، لا الاستجابة الخام من المزود.",
                 )
             }
         }
@@ -281,7 +299,11 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
 }
 
 @Composable
-private fun DurableSessionCard(source: DurableSourceUiState, stt: DurableSttUiState) {
+private fun DurableSessionCard(
+    source: DurableSourceUiState,
+    stt: DurableSttUiState,
+    translation: DurableTranslationUiState,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("حالة الجلسة", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -299,6 +321,15 @@ private fun DurableSessionCard(source: DurableSourceUiState, stt: DurableSttUiSt
                 )
                 DurableSttPhase.RECOVERED -> Text("✓ تم استرداد نص STT المقبول محليًا دون اتصال جديد.")
                 DurableSttPhase.LIVE_SUCCESS -> Text("✓ تم حفظ نتيجة STT وربطها بالجلسة.")
+                else -> Unit
+            }
+            when (translation.phase) {
+                DurableTranslationPhase.COMPLETE -> Text("✓ نصوص الترجمة المقبولة محفوظة في الجلسة ويمكن إعادة استخدامها دون AI جديد.")
+                DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME -> Text(
+                    "حالة طلب ترجمة غير مؤكدة بعد الإرسال؛ لن يعاد POST تلقائيًا."
+                )
+                DurableTranslationPhase.REVIEW_REQUIRED -> Text("هناك وحدة ترجمة تحتاج مراجعة قبل اعتمادها.")
+                DurableTranslationPhase.STALE -> Text("حالة الترجمة تغيّرت؛ لن تُستخدم نتيجة قديمة بصمت.")
                 else -> Unit
             }
         }
