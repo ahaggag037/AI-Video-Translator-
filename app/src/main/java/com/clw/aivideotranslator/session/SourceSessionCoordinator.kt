@@ -77,8 +77,6 @@ internal object SourceSessionCoordinator {
     ): Result<SourceResumeAssessment> = runCatching {
         val (manifestBefore, attachment) = store.readSourceResumeInputs(sessionId)
         if (attachment == null) {
-            // No immutable attachment object: UNBOUND / LEGACY_UNBOUND / CORRUPT_BINDING is the
-            // evaluator's call from the current manifest state alone.
             return@runCatching SourceResumeEvaluator.evaluate(manifestBefore, null, null)
         }
         val token = SourceProbeToken.from(manifestBefore)
@@ -95,6 +93,9 @@ internal object SourceSessionCoordinator {
      * probe. A valid snapshot is re-read after the blocking source probe so same-ref file tampering
      * cannot be mixed with a pre-I/O snapshot. No timing gate is changed: an UNVERIFIED snapshot is
      * returned as UNVERIFIED semantic evidence, never promoted to a verified clock.
+     *
+     * This assessment is read-only. STT attempt state is classified, but RECEIVED adoption happens
+     * only through reopenSession(), whose implementation has no credentials or provider callback.
      */
     fun assessSessionReopen(
         resolver: ContentResolver,
@@ -164,6 +165,7 @@ internal object SourceSessionCoordinator {
             return@runCatching SessionReopenAssessment(
                 source = sourceAssessment,
                 snapshotAvailability = SourceSnapshotAvailability.NOT_BOUND,
+                sttDisposition = assessSttAttemptForReopen(store, after, attachmentAfter, null),
             )
         }
 
@@ -183,7 +185,138 @@ internal object SourceSessionCoordinator {
             source = sourceAssessment,
             snapshotAvailability = SourceSnapshotAvailability.AVAILABLE,
             snapshot = snapshotAfter,
+            sttDisposition = assessSttAttemptForReopen(store, finalManifest, attachmentAfter, snapshotAfter),
         )
+    }
+
+    /**
+     * Local restart recovery only. There is deliberately no API key, transport, retry callback or
+     * network branch here. SENT remains UNKNOWN_REMOTE_OUTCOME. A durable RECEIVED snapshot may be
+     * adopted under the exact current source token and then the whole session is assessed again.
+     */
+    fun reopenSession(
+        resolver: ContentResolver,
+        store: TranslationSessionStore,
+        sessionId: String,
+    ): Result<SessionReopenAssessment> = reopenSession(store, sessionId) { token, attachment ->
+        SourceContentProbe.probe(resolver, token, attachment)
+    }
+
+    internal fun reopenSession(
+        store: TranslationSessionStore,
+        sessionId: String,
+        probe: (SourceProbeToken, SourceAttachment) -> SourceReadObservation,
+    ): Result<SessionReopenAssessment> = runCatching {
+        val recoveredReceived = recoverReceivedSttLocallyIfCurrent(store, sessionId)
+        val assessment = assessSessionReopen(store, sessionId, probe).getOrThrow()
+        if (!recoveredReceived) return@runCatching assessment
+
+        check(assessment.snapshotAvailability == SourceSnapshotAvailability.AVAILABLE &&
+            assessment.sttDisposition == SttReopenDisposition.ADOPTED) {
+            "locally recovered STT snapshot did not reopen as the exact adopted snapshot"
+        }
+        assessment.copy(sttDisposition = SttReopenDisposition.RECOVERED_RECEIVED)
+    }
+
+    private fun recoverReceivedSttLocallyIfCurrent(
+        store: TranslationSessionStore,
+        sessionId: String,
+    ): Boolean {
+        val inputs = store.readSourceResumeInputs(sessionId)
+        val manifest = inputs.manifest
+        val attachment = inputs.attachment ?: return false
+        if (manifest.sourceBindingState != SourceBindingState.ATTACHMENT_BOUND &&
+            manifest.sourceBindingState != SourceBindingState.SNAPSHOT_BOUND) return false
+
+        val attemptId = SttAttemptIdentity.forInitialSnapshot(sessionId, attachment.attachmentId)
+        val attempt = readSttAttemptForReopen(store, sessionId, attemptId) ?: return false
+        if (attempt.phase != SttAttemptPhase.RECEIVED) return false
+
+        val activeSnapshot = if (manifest.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
+            readSnapshotForReopen(store, sessionId) ?: return false
+        } else null
+        if (assessSttAttemptForReopen(store, manifest, attachment, activeSnapshot) !=
+            SttReopenDisposition.RECEIVED_AVAILABLE) return false
+
+        val snapshot = requireNotNull(attempt.snapshot) { "RECEIVED STT attempt is missing snapshot" }
+        when (manifest.sourceBindingState) {
+            SourceBindingState.ATTACHMENT_BOUND -> {
+                val token = SourceBindingToken.from(manifest)
+                store.bindInitialSourceSnapshotIfCurrent(token, snapshot)
+            }
+            SourceBindingState.SNAPSHOT_BOUND -> Unit
+            SourceBindingState.UNBOUND,
+            SourceBindingState.LEGACY_UNBOUND,
+            -> return false
+        }
+        store.markSttAttemptAdopted(attempt.copy(phase = SttAttemptPhase.ADOPTED))
+        return true
+    }
+
+    private fun assessSttAttemptForReopen(
+        store: TranslationSessionStore,
+        manifest: SessionManifest,
+        attachment: SourceAttachment,
+        activeSnapshot: SourceSnapshot?,
+    ): SttReopenDisposition {
+        val attemptId = SttAttemptIdentity.forInitialSnapshot(manifest.sessionId, attachment.attachmentId)
+        val attempt = try {
+            store.readSttAttemptOrNull(manifest.sessionId, attemptId)
+        } catch (error: Exception) {
+            return if (isBoundedDurableReadFailure(error)) {
+                SttReopenDisposition.CORRUPT_JOURNAL
+            } else throw error
+        } ?: return if (manifest.sourceBindingState == SourceBindingState.ATTACHMENT_BOUND) {
+            SttReopenDisposition.SAFE_TO_SUBMIT
+        } else {
+            SttReopenDisposition.NOT_APPLICABLE
+        }
+
+        if (attempt.sessionId != manifest.sessionId || attempt.sourceAttachmentId != attachment.attachmentId) {
+            return SttReopenDisposition.CORRUPT_JOURNAL
+        }
+
+        return when (manifest.sourceBindingState) {
+            SourceBindingState.ATTACHMENT_BOUND -> {
+                if (attempt.epoch != manifest.epoch ||
+                    attempt.expectedManifestRevision != manifest.revision) {
+                    SttReopenDisposition.STALE_ATTEMPT
+                } else when (attempt.phase) {
+                    SttAttemptPhase.PREPARED -> SttReopenDisposition.SAFE_TO_SUBMIT
+                    SttAttemptPhase.SENT -> SttReopenDisposition.UNKNOWN_REMOTE_OUTCOME
+                    SttAttemptPhase.RECEIVED -> SttReopenDisposition.RECEIVED_AVAILABLE
+                    SttAttemptPhase.ADOPTED -> SttReopenDisposition.CORRUPT_JOURNAL
+                }
+            }
+
+            SourceBindingState.SNAPSHOT_BOUND -> {
+                val snapshot = activeSnapshot ?: return SttReopenDisposition.CORRUPT_JOURNAL
+                val attemptSnapshot = attempt.snapshot
+                if ((attempt.phase != SttAttemptPhase.RECEIVED && attempt.phase != SttAttemptPhase.ADOPTED) ||
+                    attemptSnapshot == null || attemptSnapshot.snapshotId != snapshot.snapshotId ||
+                    manifest.activeSourceSnapshotRef != snapshot.snapshotId) {
+                    SttReopenDisposition.CORRUPT_JOURNAL
+                } else if (attempt.phase == SttAttemptPhase.RECEIVED) {
+                    SttReopenDisposition.RECEIVED_AVAILABLE
+                } else {
+                    SttReopenDisposition.ADOPTED
+                }
+            }
+
+            SourceBindingState.UNBOUND,
+            SourceBindingState.LEGACY_UNBOUND,
+            -> SttReopenDisposition.NOT_APPLICABLE
+        }
+    }
+
+    private fun readSttAttemptForReopen(
+        store: TranslationSessionStore,
+        sessionId: String,
+        attemptId: String,
+    ): SttAttemptReceipt? = try {
+        store.readSttAttemptOrNull(sessionId, attemptId)
+    } catch (error: Exception) {
+        if (isBoundedDurableReadFailure(error)) null else throw error
     }
 
     private fun staleReopen(before: SessionManifest) = SessionReopenAssessment(
@@ -191,6 +324,7 @@ internal object SourceSessionCoordinator {
         snapshotAvailability = if (before.sourceBindingState == SourceBindingState.SNAPSHOT_BOUND) {
             SourceSnapshotAvailability.STALE_OBSERVATION
         } else SourceSnapshotAvailability.NOT_BOUND,
+        sttDisposition = SttReopenDisposition.STALE_ATTEMPT,
     )
 
     private fun readSnapshotForReopen(
@@ -199,14 +333,16 @@ internal object SourceSessionCoordinator {
     ): SourceSnapshot? = try {
         store.readActiveSourceSnapshot(sessionId)
     } catch (error: Exception) {
-        when (error) {
-            is java.io.IOException,
-            is SecurityException,
-            is IllegalArgumentException,
-            is org.json.JSONException,
-            is ArithmeticException,
-            -> null
-            else -> throw error
-        }
+        if (isBoundedDurableReadFailure(error)) null else throw error
+    }
+
+    private fun isBoundedDurableReadFailure(error: Exception): Boolean = when (error) {
+        is java.io.IOException,
+        is SecurityException,
+        is IllegalArgumentException,
+        is org.json.JSONException,
+        is ArithmeticException,
+        -> true
+        else -> false
     }
 }
