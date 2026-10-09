@@ -1,6 +1,7 @@
 package com.clw.aivideotranslator.session
 
 import android.util.AtomicFile
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import org.json.JSONObject
@@ -83,9 +84,18 @@ internal class ActiveSessionRegistry(
         if (!pointerFile.exists()) return null
         require(pointerFile.isFile) { "active-session pointer is not a file" }
         val bytes = AtomicFile(pointerFile).openRead().use { input ->
-            val data = input.readBytes()
-            require(data.size <= ActiveSessionPointerCodec.MAX_BYTES) { "active-session pointer too large" }
-            data
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(1_024)
+            while (true) {
+                val remaining = ActiveSessionPointerCodec.MAX_BYTES + 1 - output.size()
+                require(remaining > 0) { "active-session pointer too large" }
+                val count = input.read(buffer, 0, minOf(buffer.size, remaining))
+                if (count == -1) break
+                if (count == 0) continue
+                output.write(buffer, 0, count)
+                require(output.size() <= ActiveSessionPointerCodec.MAX_BYTES) { "active-session pointer too large" }
+            }
+            output.toByteArray()
         }
         val pointer = ActiveSessionPointerCodec.decode(bytes.toString(Charsets.UTF_8))
         if (validateTarget) validateSession(pointer.sessionId)
