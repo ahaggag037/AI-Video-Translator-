@@ -29,6 +29,14 @@ enum class DurableSourceFailure {
     PERSISTENCE,
     ACTIVATION,
     RESTORE,
+    CHECK_REQUIRED,
+    PERMISSION_MISSING,
+    SOURCE_MISSING,
+    SOURCE_CHANGED,
+    IO_FAILURE,
+    UNSUPPORTED,
+    CORRUPT,
+    STALE,
 }
 
 data class DurableSourceUiState(
@@ -91,6 +99,15 @@ data class DurableSttUiState(
     }
 }
 
+internal fun interface DurableSttRunner {
+    fun run(
+        context: Context,
+        store: TranslationSessionStore,
+        sessionId: String,
+        apiKey: String,
+    ): Result<SourceSnapshotOperationResult>
+}
+
 /**
  * Activity configuration-change owner for Task17. Disk remains recovery truth; this ViewModel owns
  * only cancellable in-process work and delegates reopen/status semantics to
@@ -100,6 +117,9 @@ internal class TranslationSessionViewModel(
     context: Context,
     private val activeSessionOwner: ActiveSessionOwner,
     private val store: TranslationSessionStore,
+    private val sttRunner: DurableSttRunner = DurableSttRunner { appContext, sessionStore, sessionId, apiKey ->
+        SourceSnapshotOperation.transcribeAndBindDetailed(appContext, sessionStore, sessionId, apiKey)
+    },
 ) : ViewModel() {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -179,11 +199,21 @@ internal class TranslationSessionViewModel(
                         )
                     } else {
                         val exact = requireNotNull(attachment) { "bound source attachment missing" }
-                        mutableDurableSource.value = DurableSourceUiState(
-                            phase = DurableSourcePhase.BOUND,
-                            sessionId = sessionId,
-                            contentUri = exact.contentUri,
-                        )
+                        val sourceFailure = sourceFailureFor(controllerState.assessment?.source?.availability)
+                        mutableDurableSource.value = if (sourceFailure == null) {
+                            DurableSourceUiState(
+                                phase = DurableSourcePhase.BOUND,
+                                sessionId = sessionId,
+                                contentUri = exact.contentUri,
+                            )
+                        } else {
+                            DurableSourceUiState(
+                                phase = DurableSourcePhase.FAILED,
+                                sessionId = sessionId,
+                                contentUri = exact.contentUri,
+                                failure = sourceFailure,
+                            )
+                        }
                     }
                 },
                 onFailure = { error ->
@@ -224,12 +254,7 @@ internal class TranslationSessionViewModel(
                 withContext(Dispatchers.IO) {
                     check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed before STT" }
                     requireCurrentSourceGeneration(generation)
-                    val result = SourceSnapshotOperation.transcribeAndBindDetailed(
-                        context = appContext,
-                        store = store,
-                        sessionId = sessionId,
-                        apiKey = apiKey,
-                    ).getOrThrow()
+                    val result = sttRunner.run(appContext, store, sessionId, apiKey).getOrThrow()
                     requireCurrentSourceGeneration(generation)
                     check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed after STT" }
                     val snapshot = store.readActiveSourceSnapshot(sessionId)
@@ -308,15 +333,31 @@ internal class TranslationSessionViewModel(
         val attachment = durable.first
         val snapshot = durable.second
         if (attachment != null) {
-            mutableDurableSource.value = DurableSourceUiState(
-                phase = DurableSourcePhase.BOUND,
-                sessionId = sessionId,
-                contentUri = attachment.contentUri,
-            )
+            val sourceFailure = sourceFailureFor(controllerState.assessment?.source?.availability)
+            mutableDurableSource.value = if (sourceFailure == null) {
+                DurableSourceUiState(
+                    phase = DurableSourcePhase.BOUND,
+                    sessionId = sessionId,
+                    contentUri = attachment.contentUri,
+                )
+            } else {
+                DurableSourceUiState(
+                    phase = DurableSourcePhase.FAILED,
+                    sessionId = sessionId,
+                    contentUri = attachment.contentUri,
+                    failure = sourceFailure,
+                )
+            }
             mutableStt.value = when {
                 controllerState.blocker == SessionBlocker.STT_UNKNOWN_REMOTE_OUTCOME -> DurableSttUiState(
                     phase = DurableSttPhase.UNKNOWN_REMOTE_OUTCOME,
                     sessionId = sessionId,
+                )
+                controllerState.blocker == SessionBlocker.CORRUPT_DURABLE_STATE ||
+                    controllerState.blocker == SessionBlocker.STALE_STATE -> DurableSttUiState(
+                    phase = DurableSttPhase.FAILED,
+                    sessionId = sessionId,
+                    failure = DurableSttFailure.RESTORE,
                 )
                 snapshot != null -> DurableSttUiState(
                     phase = DurableSttPhase.RECOVERED,
@@ -335,7 +376,7 @@ internal class TranslationSessionViewModel(
             mutableDurableSource.value = DurableSourceUiState(
                 phase = DurableSourcePhase.FAILED,
                 sessionId = sessionId,
-                failure = DurableSourceFailure.RESTORE,
+                failure = sourceFailureFor(availability) ?: DurableSourceFailure.RESTORE,
             )
             mutableStt.value = DurableSttUiState(
                 phase = DurableSttPhase.FAILED,
@@ -343,6 +384,18 @@ internal class TranslationSessionViewModel(
                 failure = DurableSttFailure.RESTORE,
             )
         }
+    }
+
+    private fun sourceFailureFor(availability: SourceAvailability?): DurableSourceFailure? = when (availability) {
+        null, SourceAvailability.AVAILABLE, SourceAvailability.UNBOUND, SourceAvailability.LEGACY_UNBOUND -> null
+        SourceAvailability.CHECK_REQUIRED -> DurableSourceFailure.CHECK_REQUIRED
+        SourceAvailability.PERMISSION_MISSING -> DurableSourceFailure.PERMISSION_MISSING
+        SourceAvailability.SOURCE_MISSING -> DurableSourceFailure.SOURCE_MISSING
+        SourceAvailability.SOURCE_CHANGED -> DurableSourceFailure.SOURCE_CHANGED
+        SourceAvailability.IO_FAILURE -> DurableSourceFailure.IO_FAILURE
+        SourceAvailability.UNSUPPORTED -> DurableSourceFailure.UNSUPPORTED
+        SourceAvailability.CORRUPT_BINDING -> DurableSourceFailure.CORRUPT
+        SourceAvailability.STALE_OBSERVATION -> DurableSourceFailure.STALE
     }
 
     private fun requireCurrentSourceGeneration(expected: Long) {
