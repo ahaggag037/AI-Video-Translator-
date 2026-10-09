@@ -140,7 +140,7 @@ class RasterCoordinator(
         executor.execute {
             val produced = try {
                 producer.produce(entry.request)
-            } catch (error: Throwable) {
+            } catch (error: Exception) {
                 synchronized(lock) {
                     entry.completion.completeExceptionally(error)
                     if (entry.evicted && entry.leaseCount == 0) entries.remove(entry.request.requestId, entry)
