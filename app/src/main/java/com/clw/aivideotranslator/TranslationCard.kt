@@ -30,32 +30,35 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.Transformer
-import kotlinx.coroutines.CancellationException
+import com.clw.aivideotranslator.session.DurableTranslationFailure
+import com.clw.aivideotranslator.session.DurableTranslationPhase
+import com.clw.aivideotranslator.session.DurableTranslationUiState
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+private data class DurableTranslationPreview(
+    val units: List<SourceUnit>,
+    val cues: List<ArabicSubtitleCue>,
+    val srt: String,
+)
+
 @OptIn(UnstableApi::class)
 @Composable
 internal fun TranslationCard(
     result: NvidiaSttResult,
-    apiKey: String,
+    translationState: DurableTranslationUiState,
+    canTranslate: Boolean,
+    onTranslate: () -> Unit,
     sourceUri: Uri,
     videoDurationMs: Long,
     sampleStartMs: Long = 0L,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var job by remember { mutableStateOf<Job?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("ستُرسل النصوص الإنجليزية فقط إلى NVIDIA.") }
-    var units by remember { mutableStateOf<List<SourceUnit>>(emptyList()) }
-    var cues by remember { mutableStateOf<List<ArabicSubtitleCue>>(emptyList()) }
-    var srt by remember { mutableStateOf<String?>(null) }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf(false) }
 
@@ -65,6 +68,39 @@ internal fun TranslationCard(
     var burnedVideo by remember { mutableStateOf<BurnedVideoResult?>(null) }
     var pendingVideoSave by remember { mutableStateOf<File?>(null) }
     var savingVideo by remember { mutableStateOf(false) }
+    var renderStatus by remember { mutableStateOf<String?>(null) }
+
+    val previewResult = remember(result, translationState, sampleStartMs, videoDurationMs) {
+        if (translationState.phase != DurableTranslationPhase.COMPLETE) {
+            null
+        } else {
+            runCatching {
+                val units = SubtitlePipeline.sourceUnits(result.words)
+                val entries = translationState.texts.map { text ->
+                    TranslationEntry(text.unitId, text.text)
+                }
+                val sampleCues = SubtitlePipeline.cues(units, entries)
+                val presentationCues = SubtitlePipeline.toPresentationTimeline(
+                    sampleCues = sampleCues,
+                    sampleStartMs = sampleStartMs,
+                    videoDurationMs = videoDurationMs,
+                )
+                DurableTranslationPreview(
+                    units = units,
+                    cues = presentationCues,
+                    srt = SubtitlePipeline.srt(presentationCues, videoDurationMs),
+                )
+            }
+        }
+    }
+    val preview = previewResult?.getOrNull()
+
+    LaunchedEffect(translationState.texts) {
+        if (translationState.phase != DurableTranslationPhase.COMPLETE) {
+            burnedVideo = null
+            renderStatus = null
+        }
+    }
 
     val save = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/x-subrip")
@@ -129,60 +165,42 @@ internal fun TranslationCard(
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("الترجمة العربية — P0-F تصدير MP4")
-            Text("الإصدار 0.1.4-p0f-hardburn")
+            Text("الترجمة العربية — جلسة دائمة")
             Text(NvidiaTranslationClient.MODEL_ID)
-            Text(status)
-            Button(
-                enabled = !busy && !exporting && !renderingVideo && pendingExport == null && apiKey.isNotBlank(),
-                onClick = {
-                    val keySnapshot = apiKey
-                    busy = true
-                    srt = null
-                    cues = emptyList()
-                    units = emptyList()
-                    burnedVideo = null
-                    job = scope.launch {
-                        try {
-                            val source = SubtitlePipeline.sourceUnits(result.words)
-                            units = source
-                            val translated = mutableListOf<TranslationEntry>()
-                            source.forEachIndexed { index, unit ->
-                                status = "جارٍ ترجمة الوحدة ${index + 1} / ${source.size}…"
-                                val text = NvidiaTranslationClient.translate(keySnapshot, unit.sourceText)
-                                translated += TranslationEntry(unit.id, text)
-                                if (index < source.lastIndex) delay(1_500)
-                            }
-                            val sampleCues = SubtitlePipeline.cues(source, translated)
-                            val presentationCues = SubtitlePipeline.toPresentationTimeline(
-                                sampleCues = sampleCues,
-                                sampleStartMs = sampleStartMs,
-                                videoDurationMs = videoDurationMs,
-                            )
-                            val text = SubtitlePipeline.srt(presentationCues, videoDurationMs)
-                            cues = presentationCues
-                            srt = text
-                            status = "✓ اكتملت الترجمة وربط التوقيت بخط الفيديو وإنشاء SRT."
-                        } catch (e: CancellationException) {
-                            status = "أُلغيت الترجمة؛ لم يتم إنشاء SRT."
-                            throw e
-                        } catch (e: Exception) {
-                            status = e.message ?: "تعذر إكمال الترجمة"
-                        } finally {
-                            busy = false
-                        }
-                    }
-                },
-            ) { Text("ترجمة العينة إلى العربية") }
+            Text(translationStatus(translationState, previewResult?.exceptionOrNull()))
+            renderStatus?.let { Text(it) }
 
-            if (busy) {
-                Button(onClick = { job?.cancel() }) { Text("إلغاء الترجمة") }
+            val canStartTranslation = canTranslate &&
+                (translationState.phase == DurableTranslationPhase.IDLE ||
+                    translationState.phase == DurableTranslationPhase.FAILED) &&
+                !exporting && !renderingVideo && pendingExport == null
+            Button(
+                enabled = canStartTranslation,
+                onClick = {
+                    burnedVideo = null
+                    renderStatus = null
+                    onTranslate()
+                },
+            ) {
+                Text(
+                    if (translationState.phase == DurableTranslationPhase.FAILED) {
+                        "إعادة محاولة الترجمة"
+                    } else {
+                        "ترجمة العينة إلى العربية"
+                    }
+                )
             }
 
-            val completedSrt = srt
-            if (completedSrt != null) {
+            if (translationState.phase == DurableTranslationPhase.RUNNING) {
+                Text("يُحفظ كل طلب قبل الإرسال؛ لا تغلق الجلسة أثناء التنفيذ إلا إذا أردت الاسترداد لاحقًا.")
+            }
+
+            if (preview != null) {
+                val completedSrt = preview.srt
+                val cues = preview.cues
+                val units = preview.units
                 val sampleEndMs = minOf(videoDurationMs, sampleStartMs + SubtitlePipeline.SAMPLE_END_MS)
-                Text("✓ أزمنة SRT أصبحت على خط الفيديو الأصلي. بداية العينة الحالية = ${SubtitlePipeline.timestamp(sampleStartMs)}")
+                Text("✓ النصوص الدائمة طابقت وحدات P0-F وأزمنة SRT الحالية على خط الفيديو الأصلي.")
                 VideoSubtitlePreview(
                     sourceUri = sourceUri,
                     cues = cues,
@@ -190,14 +208,14 @@ internal fun TranslationCard(
                     sampleEndMs = sampleEndMs,
                 )
 
-                Text("ملف SRT ترجمة نصية فقط، وليس فيديو. الزر التالي ينشئ MP4 فعليًا مع العربية محروقة داخل الصورة.")
+                Text("ملف SRT ترجمة نصية فقط. إنشاء MP4 أدناه يعيد استخدام النصوص المحفوظة ولا يرسل طلب AI جديدًا.")
                 Button(
                     enabled = !renderingVideo && !savingVideo && cues.isNotEmpty(),
                     onClick = {
                         renderingVideo = true
                         renderProgress = null
                         burnedVideo = null
-                        status = "جارٍ إنشاء MP4 مترجم لأول 60 ثانية…"
+                        renderStatus = "جارٍ إنشاء MP4 مترجم لأول 60 ثانية…"
                         runCatching {
                             BurnedSubtitleExporter.start(
                                 context = context,
@@ -210,19 +228,19 @@ internal fun TranslationCard(
                                     renderingVideo = false
                                     activeTransformer = null
                                     renderProgress = 100
-                                    status = "✓ تم إنشاء فيديو MP4 مترجم والتحقق من وجود مسار فيديو صالح."
+                                    renderStatus = "✓ تم إنشاء فيديو MP4 مترجم والتحقق من وجود مسار فيديو صالح."
                                 },
                                 onError = { message ->
                                     renderingVideo = false
                                     activeTransformer = null
-                                    status = "فشل إنشاء MP4: $message"
+                                    renderStatus = "فشل إنشاء MP4: $message"
                                 },
                             )
                         }.onSuccess { activeTransformer = it }
                             .onFailure {
                                 renderingVideo = false
                                 activeTransformer = null
-                                status = "فشل بدء إنشاء MP4: ${it.message ?: "خطأ غير معروف"}"
+                                renderStatus = "فشل بدء إنشاء MP4: ${it.message ?: "خطأ غير معروف"}"
                             }
                     },
                 ) { Text("إنشاء فيديو MP4 مترجم — أول 60 ثانية") }
@@ -234,7 +252,7 @@ internal fun TranslationCard(
                         activeTransformer = null
                         renderingVideo = false
                         renderProgress = null
-                        status = "أُلغي إنشاء الفيديو. الترجمة وSRT ما زالا محفوظين في الذاكرة."
+                        renderStatus = "أُلغي إنشاء الفيديو. نصوص الترجمة ما زالت محفوظة في الجلسة."
                     }) { Text("إلغاء إنشاء الفيديو") }
                 }
 
@@ -337,5 +355,32 @@ internal fun TranslationCard(
                 }
             }
         }
+    }
+}
+
+private fun translationStatus(
+    state: DurableTranslationUiState,
+    previewError: Throwable?,
+): String = when (state.phase) {
+    DurableTranslationPhase.IDLE ->
+        "الترجمة تستخدم نفس NVIDIA/P0-F الحالي، لكن الطلب والنتيجة المقبولة سيُحفظان في الجلسة."
+    DurableTranslationPhase.RUNNING -> "جارٍ تنفيذ الترجمة الدائمة بالتتابع…"
+    DurableTranslationPhase.COMPLETE -> if (previewError == null) {
+        "✓ اكتملت الترجمة وحُفظت النصوص المقبولة. إعادة التصدير لا تعيد طلب AI."
+    } else {
+        "النصوص محفوظة، لكن تعذر مطابقتها بأمان مع توقيت المعاينة الحالي؛ لن يتم إنشاء SRT أو MP4."
+    }
+    DurableTranslationPhase.REVIEW_REQUIRED ->
+        "توقفت الترجمة عند ${state.blockingUnitId}: النتيجة تحتاج مراجعة قبل الاعتماد."
+    DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME ->
+        "توقفت الترجمة عند ${state.blockingUnitId}: نتيجة الإرسال غير مؤكدة ولن يُعاد الطلب تلقائيًا."
+    DurableTranslationPhase.STALE ->
+        "توقفت الترجمة عند ${state.blockingUnitId}: الحالة الدائمة تغيّرت ولن تُستخدم نتيجة قديمة بصمت."
+    DurableTranslationPhase.FAILED -> when (state.failure) {
+        DurableTranslationFailure.NO_LIVE_STT -> "يلزم STT حي موثوق بالتوقيت الحالي قبل إنشاء ترجمة مرتبطة بالمعاينة."
+        DurableTranslationFailure.NO_BOUND_SOURCE -> "اربط فيديو صالحًا بالجلسة أولًا."
+        DurableTranslationFailure.RESTORE -> "تعذر استرداد حالة الترجمة الدائمة بأمان."
+        DurableTranslationFailure.PROVIDER_REJECTED_OR_PENDING -> "لم يعتمد المزود نتيجة قابلة للاستخدام؛ لم يُنشأ SRT."
+        DurableTranslationFailure.PROVIDER_OR_STORAGE, null -> "تعذر إكمال الترجمة أو حفظها بأمان."
     }
 }
