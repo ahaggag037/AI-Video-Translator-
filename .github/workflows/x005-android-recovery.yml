@@ -3,7 +3,7 @@ name: X005 Android Recovery
 on:
   workflow_dispatch:
   push:
-    branches: [ 'build/p0g-gpt6-cleanroom-v1' ]
+    branches: [ 'build/p0g-gpt6-cleanroom-v1', 'build/x004-transformer-parity-device' ]
     paths:
       - 'app/src/main/java/com/clw/aivideotranslator/session/**'
       - 'app/src/main/java/com/clw/aivideotranslator/semantic/**'
