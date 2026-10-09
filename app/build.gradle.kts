@@ -67,7 +67,7 @@ android {
     }
 }
 
-tasks.register("verifyReleaseSigningReady") {
+val verifyReleaseSigningReady = tasks.register("verifyReleaseSigningReady") {
     group = "verification"
     description = "Fails unless all release-signing inputs are configured and the keystore exists."
     doLast {
@@ -79,6 +79,12 @@ tasks.register("verifyReleaseSigningReady") {
         val keystore = rootProject.file(releaseStoreFilePath.get())
         check(keystore.isFile) { "Configured release keystore does not exist: ${keystore.absolutePath}" }
     }
+}
+
+// Never allow an unsigned release artifact to be mistaken for a user-ready APK.
+// Debug builds remain unaffected; every release pre-build must prove signing readiness first.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(verifyReleaseSigningReady)
 }
 
 dependencies {
