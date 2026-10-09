@@ -1,7 +1,5 @@
 package com.clw.aivideotranslator.subtitle.android
 
-import android.icu.util.VersionInfo
-import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.clw.aivideotranslator.ArabicSubtitleCue
@@ -15,8 +13,7 @@ import org.junit.runner.RunWith
 class RenderSnapshotFactoryInstrumentedTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val font by lazy { SubtitleFonts.loadExperimentCandidate(context) }
-    private val environment =
-        "api=${Build.VERSION.SDK_INT};icu=${VersionInfo.ICU_VERSION};candidate=full-regular-2.012"
+    private val environment by lazy { SubtitleRendererEnvironment.current() }
     private val geometry = FrameGeometry(1080, 1920)
     private val factory = RenderSnapshotFactory()
 
