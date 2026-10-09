@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -297,10 +296,8 @@ class TranslationSessionViewModelTranslationInstrumentedTest {
         assertNull(translated.liveUnits)
         assertEquals(listOf(unit.requestPlan.unitId), translated.entries.map { it.sourceUnitId })
         assertEquals("مرحبًا بالعالم.", translated.entries.single().translatedText)
-        assertEquals(
-            "مرحبًا بالعالم.",
-            assertNotNull(harness.store.readActiveEntry(sessionId, unit.requestPlan.unitId)).record.effectiveText(),
-        )
+        val activeEntry = requireNotNull(harness.store.readActiveEntry(sessionId, unit.requestPlan.unitId))
+        assertEquals("مرحبًا بالعالم.", activeEntry.record.effectiveText())
         assertEquals(
             RequestReceiptPhase.RECEIVED,
             harness.store.readReceipt(sessionId, "attempt-received-viewmodel").phase,
