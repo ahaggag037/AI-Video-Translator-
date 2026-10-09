@@ -10,9 +10,7 @@ import com.clw.aivideotranslator.semantic.SemanticSourceUnit
 import com.clw.aivideotranslator.semantic.TranslationPlanner
 import com.clw.aivideotranslator.semantic.sha256Utf8
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
 
 class DurableTranslationAttemptExecutorTest {
@@ -47,15 +45,12 @@ class DurableTranslationAttemptExecutorTest {
         candidateText = "مرحبًا بالعالم.",
     )
 
-    @Test fun sentIsPersistedBeforeTransportCanRun() = runBlocking {
+    @Test fun newSuccessPersistsPreparedThenSentThenReceivedWithOneSubmission() = runBlocking {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
         var submitCount = 0
         val executor = DurableTranslationAttemptExecutor.forTesting(
-            persistReceipt = { receipt: RequestReceipt ->
-                persisted += receipt.phase
-                receipt
-            },
+            persistReceipt = { receipt: RequestReceipt -> persisted += receipt.phase; receipt },
         )
 
         val received = executor.execute(prepared, plan) {
@@ -74,7 +69,7 @@ class DurableTranslationAttemptExecutorTest {
 
     @Test fun sentPersistenceFailurePreventsTransportInvocation() = runBlocking {
         val (plan, prepared) = prepared()
-        var submitCalled = false
+        var submitCount = 0
         val executor = DurableTranslationAttemptExecutor.forTesting(
             persistReceipt = { receipt: RequestReceipt ->
                 if (receipt.phase == RequestReceiptPhase.SENT) error("disk failure")
@@ -82,38 +77,77 @@ class DurableTranslationAttemptExecutorTest {
             },
         )
 
-        var failed = false
-        try {
-            executor.execute(prepared, plan) {
-                submitCalled = true
-                candidate()
-            }
-        } catch (_: IllegalStateException) {
-            failed = true
-        }
-        assertTrue(failed)
-        assertFalse(submitCalled)
+        assertTrue(runCatching {
+            executor.execute(prepared, plan) { submitCount++; candidate() }
+        }.isFailure)
+        assertEquals(0, submitCount)
     }
 
-    @Test fun transportFailureLeavesLastDurablePhaseSent() = runBlocking {
+    @Test fun crashAfterSentLeavesLastDurablePhaseSentAndExactlyOneSubmission() = runBlocking {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
+        var submitCount = 0
         val executor = DurableTranslationAttemptExecutor.forTesting(
-            persistReceipt = { receipt: RequestReceipt ->
-                persisted += receipt.phase
-                receipt
-            },
+            persistReceipt = { receipt: RequestReceipt -> persisted += receipt.phase; receipt },
         )
 
-        var failed = false
-        try {
+        assertTrue(runCatching {
             executor.execute(prepared, plan) {
+                submitCount++
                 error("transport crashed after possible submission")
             }
-        } catch (_: IllegalStateException) {
-            failed = true
-        }
-        assertTrue(failed)
+        }.isFailure)
+        assertEquals(1, submitCount)
+        assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
+    }
+
+    @Test fun unknownAfterSubmissionLeavesDurableSentWithoutReceived() = runBlocking {
+        val (plan, prepared) = prepared()
+        val persisted = mutableListOf<RequestReceiptPhase>()
+        var submitCount = 0
+        val executor = DurableTranslationAttemptExecutor.forTesting(
+            persistReceipt = { receipt: RequestReceipt -> persisted += receipt.phase; receipt },
+        )
+
+        val failure = runCatching {
+            executor.execute(prepared, plan) {
+                submitCount++
+                TranslationProviderOutcome(
+                    transport = TransportOutcome.UNKNOWN_AFTER_SUBMISSION,
+                    protocol = ProtocolOutcome.NO_RESPONSE,
+                    diagnosticCode = "REMOTE_OUTCOME_UNCERTAIN",
+                )
+            }
+        }.exceptionOrNull()
+
+        assertTrue(failure is UnknownTranslationRemoteOutcomeException)
+        assertEquals(TransportOutcome.UNKNOWN_AFTER_SUBMISSION, (failure as UnknownTranslationRemoteOutcomeException).transport)
+        assertEquals(1, submitCount)
+        assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
+    }
+
+    @Test fun structuredCancellationAfterSentAlsoLeavesDurableSent() = runBlocking {
+        val (plan, prepared) = prepared()
+        val persisted = mutableListOf<RequestReceiptPhase>()
+        var submitCount = 0
+        val executor = DurableTranslationAttemptExecutor.forTesting(
+            persistReceipt = { receipt: RequestReceipt -> persisted += receipt.phase; receipt },
+        )
+
+        val failure = runCatching {
+            executor.execute(prepared, plan) {
+                submitCount++
+                TranslationProviderOutcome(
+                    transport = TransportOutcome.CANCELLED,
+                    protocol = ProtocolOutcome.NO_RESPONSE,
+                    diagnosticCode = "CANCELLED_AFTER_SENT",
+                )
+            }
+        }.exceptionOrNull()
+
+        assertTrue(failure is UnknownTranslationRemoteOutcomeException)
+        assertEquals(TransportOutcome.CANCELLED, (failure as UnknownTranslationRemoteOutcomeException).transport)
+        assertEquals(1, submitCount)
         assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
     }
 }
