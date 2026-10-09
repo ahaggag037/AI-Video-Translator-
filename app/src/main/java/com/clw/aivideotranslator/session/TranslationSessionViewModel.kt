@@ -1,59 +1,203 @@
 package com.clw.aivideotranslator.session
 
-import android.content.ContentResolver
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import java.util.UUID
+import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+enum class DurableSourcePhase {
+    NONE,
+    CAPTURING,
+    BOUND,
+    FAILED,
+}
+
+enum class DurableSourceFailure {
+    CAPTURE,
+    PERSISTENCE,
+    ACTIVATION,
+    RESTORE,
+}
+
+data class DurableSourceUiState(
+    val phase: DurableSourcePhase,
+    val sessionId: String? = null,
+    val contentUri: String? = null,
+    val failure: DurableSourceFailure? = null,
+) {
+    init {
+        when (phase) {
+            DurableSourcePhase.NONE -> require(sessionId == null && contentUri == null && failure == null)
+            DurableSourcePhase.CAPTURING -> require(sessionId == null && contentUri != null && failure == null)
+            DurableSourcePhase.BOUND -> require(sessionId != null && contentUri != null && failure == null)
+            DurableSourcePhase.FAILED -> require(failure != null)
+        }
+    }
+
+    companion object {
+        fun none() = DurableSourceUiState(DurableSourcePhase.NONE)
+    }
+}
+
 /**
  * Activity configuration-change owner for Task17. Disk remains recovery truth; this ViewModel owns
- * only cancellable in-process work and delegates UI-visible state to [TranslationSessionController].
- * It has no credential field and performs no provider submission.
+ * only cancellable in-process work and delegates reopen/status semantics to
+ * [TranslationSessionController]. Credentials are never stored here.
  */
 internal class TranslationSessionViewModel(
-    activeSessionOwner: ActiveSessionOwner,
-    store: TranslationSessionStore,
-    contentResolver: ContentResolver,
+    context: Context,
+    private val activeSessionOwner: ActiveSessionOwner,
+    private val store: TranslationSessionStore,
 ) : ViewModel() {
+    private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val jobLock = Any()
     private var activeJob: Job? = null
+    private val sourceGeneration = AtomicLong(0L)
     private val controller = TranslationSessionController(
         activeSessionOwner = activeSessionOwner,
         reopener = SessionReopener { sessionId ->
-            withContext(Dispatchers.IO) {
-                SourceSessionCoordinator.reopenSession(contentResolver, store, sessionId).getOrThrow()
-            }
+            SourceSessionCoordinator.reopenSession(appContext.contentResolver, store, sessionId).getOrThrow()
         },
     )
 
     val state = controller.state
+
+    private val mutableDurableSource = MutableStateFlow(DurableSourceUiState.none())
+    val durableSource = mutableDurableSource.asStateFlow()
 
     init {
         resumeActiveSession()
     }
 
     fun resumeActiveSession() {
-        launchExclusive { controller.resumeActiveSession() }
+        launchExclusive {
+            val result = withContext(Dispatchers.IO) { controller.resumeActiveSession() }
+            refreshDurableSource(result)
+        }
     }
 
-    fun activateAndResume(sessionId: String, expectedActiveSessionId: String?) {
-        launchExclusive { controller.activateAndResume(sessionId, expectedActiveSessionId) }
+    /**
+     * Explicit user source selection supersedes a launch-time resume. The provider URI is retained
+     * only in private durable source state and in this in-memory UI state; it is never logged.
+     */
+    fun selectNewSource(contentUri: String) {
+        require(contentUri.isNotBlank()) { "source URI is blank" }
+        cancelCurrent()
+        val generation = sourceGeneration.incrementAndGet()
+        mutableDurableSource.value = DurableSourceUiState(
+            phase = DurableSourcePhase.CAPTURING,
+            contentUri = contentUri,
+        )
+        launchExclusive {
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    val expectedActiveSessionId = activeSessionOwner.readActiveSessionId()
+                    val sessionId = "session-${UUID.randomUUID()}"
+                    val captured = SourceAttachmentBuilder.capture(
+                        context = appContext,
+                        sessionId = sessionId,
+                        contentUri = contentUri,
+                    ).getOrThrow()
+                    captured.use { source ->
+                        requireCurrentSourceGeneration(generation)
+                        store.createSession(sessionId)
+                        store.bindInitialSourceAttachment(sessionId, 0L, source.attachment)
+                        requireCurrentSourceGeneration(generation)
+                    }
+                    val controllerState = controller.activateAndResume(sessionId, expectedActiveSessionId)
+                    requireCurrentSourceGeneration(generation)
+                    Triple(sessionId, controllerState, store.readActiveSourceAttachment(sessionId))
+                }
+            }
+
+            if (sourceGeneration.get() != generation) return@launchExclusive
+            outcome.fold(
+                onSuccess = { (sessionId, controllerState, attachment) ->
+                    if (controllerState.phase == SessionControllerPhase.FAILED) {
+                        mutableDurableSource.value = DurableSourceUiState(
+                            phase = DurableSourcePhase.FAILED,
+                            sessionId = sessionId,
+                            contentUri = contentUri,
+                            failure = DurableSourceFailure.ACTIVATION,
+                        )
+                    } else {
+                        val exact = requireNotNull(attachment) { "bound source attachment missing" }
+                        mutableDurableSource.value = DurableSourceUiState(
+                            phase = DurableSourcePhase.BOUND,
+                            sessionId = sessionId,
+                            contentUri = exact.contentUri,
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    if (error is CancellationException) return@fold
+                    val failure = when (error) {
+                        is SourceCaptureException -> DurableSourceFailure.CAPTURE
+                        else -> DurableSourceFailure.PERSISTENCE
+                    }
+                    mutableDurableSource.value = DurableSourceUiState(
+                        phase = DurableSourcePhase.FAILED,
+                        contentUri = contentUri,
+                        failure = failure,
+                    )
+                },
+            )
+        }
     }
 
-    /** Fence publication before cancelling the owning coroutine. */
+    /** Fence controller/source publication before cancelling the owning coroutine. */
     fun cancelCurrent() {
+        sourceGeneration.incrementAndGet()
         controller.cancelCurrent()
         synchronized(jobLock) {
             activeJob?.cancel()
             activeJob = null
         }
+    }
+
+    private suspend fun refreshDurableSource(controllerState: TranslationSessionUiState) {
+        val sessionId = controllerState.sessionId
+        if (sessionId == null) {
+            mutableDurableSource.value = DurableSourceUiState.none()
+            return
+        }
+        val attachment = withContext(Dispatchers.IO) {
+            runCatching { store.readActiveSourceAttachment(sessionId) }.getOrNull()
+        }
+        if (attachment != null) {
+            mutableDurableSource.value = DurableSourceUiState(
+                phase = DurableSourcePhase.BOUND,
+                sessionId = sessionId,
+                contentUri = attachment.contentUri,
+            )
+            return
+        }
+        val availability = controllerState.assessment?.source?.availability
+        if (availability == SourceAvailability.UNBOUND || availability == SourceAvailability.LEGACY_UNBOUND) {
+            mutableDurableSource.value = DurableSourceUiState.none()
+        } else if (controllerState.phase == SessionControllerPhase.FAILED || controllerState.assessment != null) {
+            mutableDurableSource.value = DurableSourceUiState(
+                phase = DurableSourcePhase.FAILED,
+                sessionId = sessionId,
+                failure = DurableSourceFailure.RESTORE,
+            )
+        }
+    }
+
+    private fun requireCurrentSourceGeneration(expected: Long) {
+        if (sourceGeneration.get() != expected) throw CancellationException("source selection superseded")
     }
 
     private fun launchExclusive(block: suspend () -> Unit) {
@@ -70,6 +214,7 @@ internal class TranslationSessionViewModel(
     }
 
     override fun onCleared() {
+        sourceGeneration.incrementAndGet()
         controller.cancelCurrent()
         synchronized(jobLock) {
             activeJob?.cancel()
@@ -80,14 +225,14 @@ internal class TranslationSessionViewModel(
     }
 
     internal class Factory(
+        private val context: Context,
         private val activeSessionOwner: ActiveSessionOwner,
         private val store: TranslationSessionStore,
-        private val contentResolver: ContentResolver,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass == TranslationSessionViewModel::class.java) { "unsupported ViewModel class" }
-            return TranslationSessionViewModel(activeSessionOwner, store, contentResolver) as T
+            return TranslationSessionViewModel(context, activeSessionOwner, store) as T
         }
     }
 }
