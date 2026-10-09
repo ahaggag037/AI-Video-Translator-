@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.IOException
 import java.util.UUID
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -64,6 +65,34 @@ class ActiveSessionRegistryInstrumentedTest {
         val registry = registry(root, store)
         registry.activateSession("session-a", null)
         File(root, "active_session.json").writeText("{")
+        assertTrue(runCatching { registry.readActiveSessionId() }.isFailure)
+    }
+
+    @Test fun oversizedPointerFailsClosed() = withRoot { root, store ->
+        store.createSession("session-a")
+        val registry = registry(root, store)
+        registry.activateSession("session-a", null)
+        File(root, "active_session.json").writeText("x".repeat(ActiveSessionPointerCodec.MAX_BYTES + 1))
+        assertTrue(runCatching { registry.readActiveSessionId() }.isFailure)
+    }
+
+    @Test fun unexpectedFieldsOrSchemaFailClosed() = withRoot { root, store ->
+        store.createSession("session-a")
+        val registry = registry(root, store)
+        registry.activateSession("session-a", null)
+        val pointer = File(root, "active_session.json")
+
+        pointer.writeText(JSONObject()
+            .put("schemaVersion", 1)
+            .put("sessionId", "session-a")
+            .put("extra", true)
+            .toString())
+        assertTrue(runCatching { registry.readActiveSessionId() }.isFailure)
+
+        pointer.writeText(JSONObject()
+            .put("schemaVersion", 2)
+            .put("sessionId", "session-a")
+            .toString())
         assertTrue(runCatching { registry.readActiveSessionId() }.isFailure)
     }
 
