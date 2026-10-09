@@ -105,9 +105,10 @@ internal class DurableLegacyTranslationOperation(
         val activeEntry = store.readActiveEntry(sessionId, plan.unitId)
         if (activeEntry != null) {
             val sourceHash = sha256Utf8(plan.exactSourceText)
-            val matchingMachine = activeEntry.record.machineRevisions.any {
-                it.requestSignature == plan.requestSignature
+            val activeMachine = activeEntry.record.activeMachineRevisionId?.let { activeId ->
+                activeEntry.record.machineRevisions.first { it.id == activeId }
             }
+            val matchingMachine = activeMachine?.requestSignature == plan.requestSignature
             val matchingManual = activeEntry.record.manualRevision?.basedOnSourceTextHash == sourceHash
             if (matchingMachine || matchingManual) {
                 return DurableTranslationUnitResult(
