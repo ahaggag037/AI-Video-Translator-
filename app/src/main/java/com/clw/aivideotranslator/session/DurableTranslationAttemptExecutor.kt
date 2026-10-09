@@ -1,8 +1,13 @@
 package com.clw.aivideotranslator.session
 
+import com.clw.aivideotranslator.provider.TransportOutcome
 import com.clw.aivideotranslator.provider.TranslationProviderOutcome
 import com.clw.aivideotranslator.semantic.TranslationPlanner
 import com.clw.aivideotranslator.semantic.TranslationRequestPlan
+
+class UnknownTranslationRemoteOutcomeException(
+    val attemptId: String,
+) : IllegalStateException("translation remote outcome is unknown for attempt $attemptId")
 
 class DurableTranslationAttemptExecutor private constructor(
     private val persistPrepared: (RequestReceipt) -> RequestReceipt,
@@ -46,9 +51,14 @@ class DurableTranslationAttemptExecutor private constructor(
 
         // This is the first point at which caller-provided transport code can run.
         // The production constructor routes SENT through the store's atomic current-fence check.
-        // If transport throws/cancels or RECEIVED persistence fails, durable state remains SENT
-        // and recovery must treat the remote outcome as unknown rather than blindly reposting.
+        // If transport throws/cancels or says submission may already have happened, durable state
+        // deliberately remains SENT. Recovery then exposes UNKNOWN_REMOTE_OUTCOME and never turns
+        // uncertainty into a blind re-POST.
         val outcome = submit(requestPlan)
+        if (outcome.transport == TransportOutcome.UNKNOWN_AFTER_SUBMISSION) {
+            throw UnknownTranslationRemoteOutcomeException(prepared.attemptId)
+        }
+
         val received = sent.copy(
             phase = RequestReceiptPhase.RECEIVED,
             outcome = outcome,
