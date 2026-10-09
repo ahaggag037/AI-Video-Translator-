@@ -66,11 +66,11 @@ data class TranslationSessionUiState(
     }
 }
 
-fun interface SessionReopener {
+internal fun interface SessionReopener {
     suspend fun reopen(sessionId: String): SessionReopenAssessment
 }
 
-class SessionOperationInProgressException : IllegalStateException("a session operation is already active")
+internal class SessionOperationInProgressException : IllegalStateException("a session operation is already active")
 
 /**
  * Task17 controller core. It owns UI-visible state and operation fencing, but deliberately owns no
@@ -81,7 +81,7 @@ class SessionOperationInProgressException : IllegalStateException("a session ope
  * No provider/media API exists here, so reopen cannot accidentally turn an unknown SENT request into
  * a retry or make UI lifecycle responsible for media ownership.
  */
-class TranslationSessionController(
+internal class TranslationSessionController(
     private val activeSessionOwner: ActiveSessionOwner,
     private val reopener: SessionReopener,
 ) {
