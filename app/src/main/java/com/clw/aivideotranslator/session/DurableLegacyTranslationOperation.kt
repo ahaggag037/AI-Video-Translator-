@@ -1,6 +1,7 @@
 package com.clw.aivideotranslator.session
 
 import com.clw.aivideotranslator.provider.TranslationProviderOutcome
+import com.clw.aivideotranslator.semantic.TranslationPlanner
 import com.clw.aivideotranslator.semantic.TranslationRequestPlan
 import com.clw.aivideotranslator.semantic.sha256Utf8
 import java.util.UUID
@@ -41,9 +42,10 @@ fun interface TranslationPlanSubmitter {
 
 /**
  * Sequential durable execution bridge around the frozen P0-F units. It owns no segmentation policy:
- * callers supply plans produced by [LegacyParityTranslationPlanner]. Every plan is published before
- * PREPARED so a RECEIVED receipt can be recovered after process death without STT timing. Any review,
- * stale state, unresolved SENT or terminal outcome stops the batch before a later provider submission.
+ * callers supply plans produced by [LegacyParityTranslationPlanner]. A plan is published before any
+ * new PREPARED receipt so a RECEIVED receipt can be recovered after process death without STT timing.
+ * Existing compatible success is reused first. Any review, stale state, unresolved SENT or terminal
+ * outcome stops the batch before a later provider submission.
  */
 internal class DurableLegacyTranslationOperation(
     private val store: TranslationSessionStore,
@@ -76,10 +78,12 @@ internal class DurableLegacyTranslationOperation(
         plan: TranslationRequestPlan,
         submitter: TranslationPlanSubmitter,
     ): DurableTranslationUnitResult {
+        require(TranslationPlanner.isRequestPlanSelfConsistent(plan)) {
+            "legacy request plan is not self-consistent"
+        }
         require(LegacyParityTranslationPlanner.isLegacyAcceptanceSignatureValid(plan)) {
             "legacy request-plan acceptance signature mismatch"
         }
-        planStore.publish(sessionId, plan)
 
         val manifest = store.readManifest(sessionId)
         val activeEntry = store.readActiveEntry(sessionId, plan.unitId)
@@ -101,6 +105,11 @@ internal class DurableLegacyTranslationOperation(
                 disposition = DurableTranslationUnitDisposition.STALE_STATE,
             )
         }
+
+        // Only execution/recovery that may need durable request evidence requires the plan file.
+        // This keeps a previously accepted compatible entry reusable even if an unrelated orphan
+        // plan file is damaged, while every provider-capable path remains fail-closed on plan I/O.
+        planStore.publish(sessionId, plan)
 
         val allReceipts = store.listReceipts(sessionId)
         val matchingReceipts = allReceipts
