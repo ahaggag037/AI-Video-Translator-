@@ -95,7 +95,7 @@ class DurableTranslationAttemptExecutorTest {
         assertFalse(submitCalled)
     }
 
-    @Test fun transportFailureLeavesLastDurablePhaseSent() = runBlocking {
+    @Test fun thrownTransportFailureLeavesLastDurablePhaseSent() = runBlocking {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
         val executor = DurableTranslationAttemptExecutor.forTesting(
@@ -114,6 +114,33 @@ class DurableTranslationAttemptExecutorTest {
             failed = true
         }
         assertTrue(failed)
+        assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
+    }
+
+    @Test fun structuredUnknownAfterSubmissionAlsoLeavesDurableSent() = runBlocking {
+        val (plan, prepared) = prepared()
+        val persisted = mutableListOf<RequestReceiptPhase>()
+        val executor = DurableTranslationAttemptExecutor.forTesting(
+            persistReceipt = { receipt: RequestReceipt ->
+                persisted += receipt.phase
+                receipt
+            },
+        )
+
+        var unknown: UnknownTranslationRemoteOutcomeException? = null
+        try {
+            executor.execute(prepared, plan) {
+                TranslationProviderOutcome(
+                    transport = TransportOutcome.UNKNOWN_AFTER_SUBMISSION,
+                    protocol = ProtocolOutcome.NO_RESPONSE,
+                    diagnosticCode = "REMOTE_OUTCOME_UNCERTAIN",
+                )
+            }
+        } catch (error: UnknownTranslationRemoteOutcomeException) {
+            unknown = error
+        }
+
+        assertEquals(prepared.attemptId, unknown?.attemptId)
         assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
     }
 }
