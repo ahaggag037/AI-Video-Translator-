@@ -8,6 +8,9 @@ import com.clw.aivideotranslator.provider.ContentValidationOutcome
 import com.clw.aivideotranslator.provider.ProtocolOutcome
 import com.clw.aivideotranslator.provider.TranslationProviderOutcome
 import com.clw.aivideotranslator.provider.TransportOutcome
+import com.clw.aivideotranslator.semantic.MachineTranslationRevision
+import com.clw.aivideotranslator.semantic.TranslationRecord
+import com.clw.aivideotranslator.semantic.TranslationReviewState
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
@@ -104,6 +107,53 @@ class DurableLegacyTranslationEdgeCasesInstrumentedTest {
         }
         assertEquals(1, submitCount)
         assertEquals(DurableTranslationUnitDisposition.UNKNOWN_REMOTE_OUTCOME, reopened.units.single().disposition)
+    }
+
+    @Test fun historicalMatchingMachineRevisionDoesNotReuseInactiveText() = withStore { _, store, planStore ->
+        val unit = unit()
+        val record = TranslationRecord(
+            unitId = unit.requestPlan.unitId,
+            machineRevisions = listOf(
+                MachineTranslationRevision(
+                    id = "machine-old",
+                    text = "old matching text",
+                    requestSignature = unit.requestPlan.requestSignature,
+                ),
+                MachineTranslationRevision(
+                    id = "machine-current",
+                    text = "current different text",
+                    requestSignature = "different-request-signature",
+                ),
+            ),
+            activeMachineRevisionId = "machine-current",
+            manualRevision = null,
+            reviewState = TranslationReviewState.MACHINE_CANDIDATE,
+        )
+        store.commitEntry(
+            sessionId = "session-1",
+            expectedRevision = 0L,
+            entry = StoredTranslationEntry(
+                revisionId = "entry-current",
+                record = record,
+            ),
+        )
+        var submitCount = 0
+
+        val result = runBlocking {
+            DurableLegacyTranslationOperation(store, planStore).execute("session-1", listOf(unit)) {
+                submitCount++
+                candidate()
+            }.getOrThrow()
+        }
+
+        assertEquals(0, submitCount)
+        assertFalse(result.completed)
+        assertEquals(DurableTranslationUnitDisposition.STALE_STATE, result.units.single().disposition)
+        assertEquals(
+            "current different text",
+            store.readActiveEntry("session-1", unit.requestPlan.unitId)!!.record.effectiveText(),
+        )
+        assertTrue(store.listReceipts("session-1").isEmpty())
     }
 
     @Test fun receivedAttemptResumesFromPersistedPlanAfterProcessDeathWithoutLegacyTiming() = withStore { root, store, planStore ->
