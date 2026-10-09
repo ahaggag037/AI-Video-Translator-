@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -183,7 +184,13 @@ internal class TranslationSessionViewModel(
     },
     private val planStore: TranslationRequestPlanStore? = null,
     private val translationSubmitterFactory: (String) -> TranslationPlanSubmitter = { apiKey ->
-        TranslationPlanSubmitter { plan -> NvidiaTranslationClient.translateDetailed(apiKey, plan) }
+        var submittedOne = false
+        TranslationPlanSubmitter { plan ->
+            if (submittedOne) delay(1_500L)
+            val outcome = NvidiaTranslationClient.translateDetailed(apiKey, plan)
+            submittedOne = true
+            outcome
+        }
     },
 ) : ViewModel() {
     private val appContext = context.applicationContext
@@ -317,11 +324,6 @@ internal class TranslationSessionViewModel(
             return
         }
         val generation = sourceGeneration.get()
-        // The exclusive-operation gate must be evaluated on the ViewModel dispatcher, not on this
-        // caller thread. BOUND is published from inside the still-running source-binding coroutine,
-        // whose completion (which releases activeJob) is only queued behind that publication on the
-        // main dispatcher. Gating on the caller thread raced with that completion bookkeeping and
-        // could silently drop the STT attempt, leaving `stt` in IDLE forever.
         scope.launch {
             if (sourceGeneration.get() != generation) return@launch
             if (!launchExclusive {
@@ -431,6 +433,9 @@ internal class TranslationSessionViewModel(
                         }
                         requireCurrentSourceGeneration(generation)
                         val units = LegacyParityTranslationPlanner.plan(legacyResult)
+                        // Publish the whole local plan set before the first POST. A crash after unit N
+                        // can then distinguish a complete batch from a durable prefix after restart.
+                        units.forEach { unit -> requestPlanStore.publish(sessionId, unit.requestPlan) }
                         val batch = DurableLegacyTranslationOperation(store, requestPlanStore).execute(
                             sessionId = sessionId,
                             units = units,
@@ -547,33 +552,48 @@ internal class TranslationSessionViewModel(
     }
 
     private fun restoreTranslationState(sessionId: String): DurableTranslationUiState = runCatching {
-        val manifest = store.readManifest(sessionId)
-        val texts = manifest.activeEntryRefs.keys.sorted().map { unitId ->
-            val entry = requireNotNull(store.readActiveEntry(sessionId, unitId)) { "active translation entry missing" }
-            DurableTranslationText(
-                unitId = unitId,
-                text = requireNotNull(entry.record.effectiveText()) { "active translation entry has no effective text" },
-            )
+        val requestPlanStore = planStore
+        if (requestPlanStore != null) {
+            recoverReceivedTranslationState(sessionId, requestPlanStore)?.let { return@runCatching it }
         }
+
+        val manifest = store.readManifest(sessionId)
+        val texts = durableTranslationTexts(sessionId, manifest)
         val activeIds = texts.mapTo(mutableSetOf()) { it.unitId }
-        val unresolved = store.listReceipts(sessionId).firstOrNull { receipt ->
+        val receipts = store.listReceipts(sessionId)
+        val unresolved = receipts.firstOrNull { receipt ->
             receipt.phase == RequestReceiptPhase.SENT &&
                 receipt.epoch == manifest.epoch &&
                 receipt.unitId !in activeIds
         }
-        when {
-            unresolved != null -> DurableTranslationUiState(
+        if (unresolved != null) {
+            return@runCatching DurableTranslationUiState(
                 phase = DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME,
                 sessionId = sessionId,
                 texts = texts,
                 blockingUnitId = unresolved.unitId,
             )
-            texts.isNotEmpty() -> DurableTranslationUiState(
+        }
+
+        val expectedUnitIds = requestPlanStore
+            ?.list(sessionId)
+            ?.map { it.unitId }
+            ?.toSortedSet()
+            ?: sortedSetOf()
+        when {
+            expectedUnitIds.isEmpty() && texts.isEmpty() -> DurableTranslationUiState.idle()
+            expectedUnitIds.isNotEmpty() && activeIds == expectedUnitIds -> DurableTranslationUiState(
                 phase = DurableTranslationPhase.COMPLETE,
                 sessionId = sessionId,
                 texts = texts,
             )
-            else -> DurableTranslationUiState.idle()
+            else -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.FAILED,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = expectedUnitIds.firstOrNull { it !in activeIds },
+                failure = DurableTranslationFailure.RESTORE,
+            )
         }
     }.getOrElse {
         DurableTranslationUiState(
@@ -583,14 +603,85 @@ internal class TranslationSessionViewModel(
         )
     }
 
-    private fun durableTranslationTextsOrEmpty(sessionId: String): List<DurableTranslationText> =
-        runCatching {
-            val manifest = store.readManifest(sessionId)
-            manifest.activeEntryRefs.keys.sorted().map { unitId ->
-                val entry = requireNotNull(store.readActiveEntry(sessionId, unitId))
-                DurableTranslationText(unitId, requireNotNull(entry.record.effectiveText()))
+    /**
+     * Passive reopen may adopt a durable RECEIVED candidate because no transport is required. It
+     * never advances PREPARED and never submits SENT again. Non-adoptable outcomes stay typed.
+     */
+    private fun recoverReceivedTranslationState(
+        sessionId: String,
+        requestPlanStore: TranslationRequestPlanStore,
+    ): DurableTranslationUiState? {
+        val manifest = store.readManifest(sessionId)
+        val activeIds = manifest.activeEntryRefs.keys
+        val received = store.listReceipts(sessionId).filter { receipt ->
+            receipt.phase == RequestReceiptPhase.RECEIVED &&
+                receipt.epoch == manifest.epoch &&
+                receipt.unitId !in activeIds
+        }
+        if (received.isEmpty()) return null
+        if (received.size > 1) {
+            return DurableTranslationUiState(
+                phase = DurableTranslationPhase.STALE,
+                sessionId = sessionId,
+                texts = durableTranslationTexts(sessionId, manifest),
+                blockingUnitId = received.first().unitId,
+            )
+        }
+        val receipt = received.single()
+        val plan = requestPlanStore.read(sessionId, receipt.unitId, receipt.requestSignature)
+        val recovery = ReceiptRecoveryPlanner.plan(receipt, manifest, plan)
+        val texts = durableTranslationTexts(sessionId, manifest)
+        return when (recovery.action) {
+            ReceiptRecoveryAction.READY_TO_ADOPT -> {
+                store.adoptRecoveredCandidate(sessionId, receipt.attemptId, plan)
+                null
             }
-        }.getOrDefault(emptyList())
+            ReceiptRecoveryAction.REVIEW_CANDIDATE -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.REVIEW_REQUIRED,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = receipt.unitId,
+            )
+            ReceiptRecoveryAction.REQUIRE_EXPLICIT_RETRY -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = receipt.unitId,
+            )
+            ReceiptRecoveryAction.STALE_RECEIPT,
+            ReceiptRecoveryAction.PLAN_NEW_ATTEMPT,
+            -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.STALE,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = receipt.unitId,
+            )
+            ReceiptRecoveryAction.REJECT_CANDIDATE,
+            ReceiptRecoveryAction.HOLD_PENDING,
+            ReceiptRecoveryAction.TERMINAL_OUTCOME,
+            -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.FAILED,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = receipt.unitId,
+                failure = DurableTranslationFailure.PROVIDER_REJECTED_OR_PENDING,
+            )
+        }
+    }
+
+    private fun durableTranslationTexts(
+        sessionId: String,
+        manifest: SessionManifest = store.readManifest(sessionId),
+    ): List<DurableTranslationText> = manifest.activeEntryRefs.keys.sorted().map { unitId ->
+        val entry = requireNotNull(store.readActiveEntry(sessionId, unitId)) { "active translation entry missing" }
+        DurableTranslationText(
+            unitId = unitId,
+            text = requireNotNull(entry.record.effectiveText()) { "active translation entry has no effective text" },
+        )
+    }
+
+    private fun durableTranslationTextsOrEmpty(sessionId: String): List<DurableTranslationText> =
+        runCatching { durableTranslationTexts(sessionId) }.getOrDefault(emptyList())
 
     private fun publishTranslationBatch(sessionId: String, batch: DurableTranslationBatchResult) {
         val texts = batch.units.mapNotNull { unit ->
