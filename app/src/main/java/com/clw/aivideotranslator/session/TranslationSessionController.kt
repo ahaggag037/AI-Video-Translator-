@@ -2,6 +2,7 @@ package com.clw.aivideotranslator.session
 
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,7 @@ enum class SessionBlocker {
     CORRUPT_DURABLE_STATE,
     STALE_STATE,
     STT_UNKNOWN_REMOTE_OUTCOME,
+    STT_LOCAL_RECOVERY_REQUIRED,
 }
 
 enum class SessionControllerFailure {
@@ -100,6 +102,8 @@ internal class TranslationSessionController(
         return try {
             val sessionId = try {
                 activeSessionOwner.readActiveSessionId()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 return publishFailureIfCurrent(operation, null, SessionControllerFailure.ACTIVE_POINTER_READ)
             }
@@ -123,6 +127,8 @@ internal class TranslationSessionController(
             publishOpeningIfCurrent(operation, sessionId)
             try {
                 activeSessionOwner.activateSession(sessionId, expectedActiveSessionId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 return publishFailureIfCurrent(operation, sessionId, SessionControllerFailure.ACTIVE_POINTER_WRITE)
             }
@@ -168,6 +174,8 @@ internal class TranslationSessionController(
     private suspend fun reopenAndPublish(operation: Long, sessionId: String): TranslationSessionUiState {
         val assessment = try {
             reopener.reopen(sessionId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             return publishFailureIfCurrent(operation, sessionId, SessionControllerFailure.REOPEN)
         }
@@ -221,6 +229,7 @@ internal class TranslationSessionController(
     private fun blockerFor(assessment: SessionReopenAssessment): SessionBlocker? {
         when (assessment.sttDisposition) {
             SttReopenDisposition.UNKNOWN_REMOTE_OUTCOME -> return SessionBlocker.STT_UNKNOWN_REMOTE_OUTCOME
+            SttReopenDisposition.RECEIVED_AVAILABLE -> return SessionBlocker.STT_LOCAL_RECOVERY_REQUIRED
             SttReopenDisposition.CORRUPT_JOURNAL -> return SessionBlocker.CORRUPT_DURABLE_STATE
             SttReopenDisposition.STALE_ATTEMPT -> return SessionBlocker.STALE_STATE
             else -> Unit
