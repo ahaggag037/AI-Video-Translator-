@@ -117,10 +117,10 @@ class DecodedFrameParityInstrumentedTest {
                 activeB.recycle()
             }
 
-            // N27: a burned cue switch may lag at most one frame. Probe half a frame on each side of
-            // both half-open boundaries. MediaMetadataRetriever may choose the nearest decoded CFR
-            // frame, so the tolerance is intentionally one complete 30 fps frame, not a tighter
-            // synthetic timer assumption.
+            // N27 permits at most one burned-video frame of switch latency. Sample one complete CFR
+            // frame before and after each half-open boundary. Sampling half a frame with
+            // OPTION_CLOSEST is ambiguous: it can legitimately resolve to the boundary frame and
+            // create a false failure even when the renderer switched on time.
             assertBoundarySwitch(
                 output = output,
                 boundaryUs = cueA.endUs,
@@ -206,8 +206,8 @@ class DecodedFrameParityInstrumentedTest {
         label: String,
     ) {
         val reference = frameAt(output, 1_250_000L)
-        val before = frameAt(output, boundaryUs - FRAME_US / 2L)
-        val after = frameAt(output, boundaryUs + FRAME_US / 2L)
+        val before = frameAt(output, boundaryUs - FRAME_US)
+        val after = frameAt(output, boundaryUs + FRAME_US)
         try {
             if (beforeShouldContain == null) {
                 assertTrue(
