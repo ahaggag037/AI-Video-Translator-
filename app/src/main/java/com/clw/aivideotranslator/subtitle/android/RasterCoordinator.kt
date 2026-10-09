@@ -47,15 +47,22 @@ class RasterCoordinator(
             val desiredIds = desired.mapTo(linkedSetOf()) { it.requestId }
             entries.values.filter { it.request.requestId !in desiredIds }.forEach { markEvictedLocked(it) }
             desired.forEach { request ->
-                val existing = entries[request.requestId]
+                var existing = entries[request.requestId]
+                if (existing != null) {
+                    require(existing.request.sameIdentityAs(request)) {
+                        "raster request id collision with different descriptor/profile"
+                    }
+                    if (existing.retryable && existing.completion.isDone && existing.leaseCount == 0) {
+                        recycleEntryLocked(existing)
+                        entries.remove(request.requestId, existing)
+                        existing = null
+                    }
+                }
                 if (existing == null) {
                     val entry = Entry(request)
                     entries[request.requestId] = entry
                     scheduleLocked(entry)
                 } else {
-                    require(existing.request.sameIdentityAs(request)) {
-                        "raster request id collision with different descriptor/profile"
-                    }
                     existing.evicted = false
                 }
             }
@@ -134,7 +141,10 @@ class RasterCoordinator(
             val produced = try {
                 producer.produce(entry.request)
             } catch (error: Throwable) {
-                entry.completion.completeExceptionally(error)
+                synchronized(lock) {
+                    entry.completion.completeExceptionally(error)
+                    if (entry.evicted && entry.leaseCount == 0) entries.remove(entry.request.requestId, entry)
+                }
                 return@execute
             }
             synchronized(lock) {
@@ -151,6 +161,7 @@ class RasterCoordinator(
                             val reason = if (closed || entry.evicted) {
                                 "RASTER_SUPERSEDED"
                             } else {
+                                entry.retryable = true
                                 "RASTER_CACHE_BUDGET_EXCEEDED"
                             }
                             entry.completion.complete(SubtitleRasterResult.Rejected(reason))
@@ -212,6 +223,7 @@ class RasterCoordinator(
         var acceptedRaster: ImmutableSubtitleRaster? = null
         var leaseCount: Int = 0
         var evicted: Boolean = false
+        var retryable: Boolean = false
     }
 
     companion object {
