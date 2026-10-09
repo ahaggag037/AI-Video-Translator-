@@ -4,6 +4,7 @@ import com.clw.aivideotranslator.provider.TransportOutcome
 import com.clw.aivideotranslator.provider.TranslationProviderOutcome
 import com.clw.aivideotranslator.semantic.TranslationPlanner
 import com.clw.aivideotranslator.semantic.TranslationRequestPlan
+import java.util.concurrent.CancellationException
 
 class UnknownTranslationRemoteOutcomeException(
     val attemptId: String,
@@ -50,10 +51,22 @@ class DurableTranslationAttemptExecutor private constructor(
         val persistedSent = persistSentIfCurrent(sent)
         check(persistedSent == sent) { "SENT receipt persistence mismatch" }
 
-        // This is the first point at which caller-provided transport code can run. Only an actual
-        // response may advance SENT -> RECEIVED. A throw/cancellation never reaches persistence; a
-        // structured non-response is surfaced as unresolved and deliberately leaves durable SENT.
-        val outcome = submit(requestPlan)
+        // This is the first point at which caller-provided transport code can run. Once SENT is
+        // durable, an exception cannot safely prove that the remote side did not receive the request.
+        // Preserve the last durable state at SENT and surface a typed unresolved outcome so no caller
+        // can accidentally turn a transport crash into a blind retry.
+        val outcome = try {
+            submit(requestPlan)
+        } catch (error: Exception) {
+            val transport = if (error is CancellationException) {
+                TransportOutcome.CANCELLED
+            } else {
+                TransportOutcome.UNKNOWN_AFTER_SUBMISSION
+            }
+            throw UnknownTranslationRemoteOutcomeException(prepared.attemptId, transport).apply {
+                initCause(error)
+            }
+        }
         if (outcome.transport != TransportOutcome.RESPONSE_RECEIVED) {
             throw UnknownTranslationRemoteOutcomeException(prepared.attemptId, outcome.transport)
         }

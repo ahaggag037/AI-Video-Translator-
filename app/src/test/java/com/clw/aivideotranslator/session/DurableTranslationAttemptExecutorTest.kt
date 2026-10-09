@@ -9,6 +9,7 @@ import com.clw.aivideotranslator.semantic.PresentationTimeUs
 import com.clw.aivideotranslator.semantic.SemanticSourceUnit
 import com.clw.aivideotranslator.semantic.TranslationPlanner
 import com.clw.aivideotranslator.semantic.sha256Utf8
+import java.util.concurrent.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -83,7 +84,7 @@ class DurableTranslationAttemptExecutorTest {
         assertEquals(0, submitCount)
     }
 
-    @Test fun crashAfterSentLeavesLastDurablePhaseSentAndExactlyOneSubmission() = runBlocking {
+    @Test fun crashAfterSentBecomesTypedUnknownAndLeavesLastDurablePhaseSent() = runBlocking {
         val (plan, prepared) = prepared()
         val persisted = mutableListOf<RequestReceiptPhase>()
         var submitCount = 0
@@ -91,13 +92,42 @@ class DurableTranslationAttemptExecutorTest {
             persistReceipt = { receipt: RequestReceipt -> persisted += receipt.phase; receipt },
         )
 
-        assertTrue(runCatching {
+        val failure = runCatching {
             executor.execute(prepared, plan) {
                 submitCount++
                 error("transport crashed after possible submission")
             }
-        }.isFailure)
+        }.exceptionOrNull()
+
+        assertTrue(failure is UnknownTranslationRemoteOutcomeException)
+        assertEquals(
+            TransportOutcome.UNKNOWN_AFTER_SUBMISSION,
+            (failure as UnknownTranslationRemoteOutcomeException).transport,
+        )
+        assertEquals("transport crashed after possible submission", failure.cause?.message)
         assertEquals(1, submitCount)
+        assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
+    }
+
+    @Test fun thrownCancellationAfterSentBecomesTypedCancelledUnknown() = runBlocking {
+        val (plan, prepared) = prepared()
+        val persisted = mutableListOf<RequestReceiptPhase>()
+        val executor = DurableTranslationAttemptExecutor.forTesting(
+            persistReceipt = { receipt: RequestReceipt -> persisted += receipt.phase; receipt },
+        )
+
+        val failure = runCatching {
+            executor.execute(prepared, plan) {
+                throw CancellationException("cancelled after durable SENT")
+            }
+        }.exceptionOrNull()
+
+        assertTrue(failure is UnknownTranslationRemoteOutcomeException)
+        assertEquals(
+            TransportOutcome.CANCELLED,
+            (failure as UnknownTranslationRemoteOutcomeException).transport,
+        )
+        assertTrue(failure.cause is CancellationException)
         assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
     }
 
