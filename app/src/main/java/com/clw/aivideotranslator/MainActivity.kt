@@ -31,6 +31,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +44,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelProvider
+import com.clw.aivideotranslator.session.DurableSourceFailure
+import com.clw.aivideotranslator.session.DurableSourcePhase
+import com.clw.aivideotranslator.session.DurableSourceUiState
+import com.clw.aivideotranslator.session.DurableSttPhase
+import com.clw.aivideotranslator.session.DurableSttUiState
+import com.clw.aivideotranslator.session.TranslationSessionViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,7 +59,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { App() }
+        val app = application as AiVideoTranslatorApplication
+        val sessionViewModel = ViewModelProvider(
+            this,
+            TranslationSessionViewModel.Factory(
+                context = this,
+                activeSessionOwner = app.activeTranslationSession,
+                store = app.translationSessions,
+            ),
+        )[TranslationSessionViewModel::class.java]
+        setContent { App(sessionViewModel) }
     }
 }
 
@@ -61,14 +79,6 @@ private sealed interface SampleState {
     data class Error(val message: String) : SampleState
 }
 
-private sealed interface SttState {
-    data object Idle : SttState
-    data object PreparingAudio : SttState
-    data class Sending(val profile: SttAudioProfile) : SttState
-    data class Success(val profile: SttAudioProfile, val result: NvidiaSttResult) : SttState
-    data class Error(val message: String, val profile: SttAudioProfile? = null) : SttState
-}
-
 private sealed interface HomeState {
     data object Empty : HomeState
     data object Loading : HomeState
@@ -76,16 +86,17 @@ private sealed interface HomeState {
         val uri: Uri,
         val metadata: VideoMetadata,
         val sampleState: SampleState = SampleState.Idle,
-        val sttState: SttState = SttState.Idle,
     ) : HomeState
     data class Error(val message: String) : HomeState
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun App() {
+private fun App(sessionViewModel: TranslationSessionViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val durableSource by sessionViewModel.durableSource.collectAsState()
+    val durableStt by sessionViewModel.stt.collectAsState()
     var state: HomeState by remember { mutableStateOf(HomeState.Empty) }
     var player: MediaPlayer? by remember { mutableStateOf(null) }
     var nvidiaApiKey by remember { mutableStateOf("") }
@@ -95,6 +106,22 @@ private fun App() {
             player?.release()
             player = null
         }
+    }
+
+    LaunchedEffect(durableSource.phase, durableSource.sessionId, durableSource.contentUri) {
+        if (durableSource.phase != DurableSourcePhase.BOUND) return@LaunchedEffect
+        val storedUri = durableSource.contentUri ?: return@LaunchedEffect
+        val uri = runCatching { Uri.parse(storedUri) }.getOrNull() ?: return@LaunchedEffect
+        val current = state
+        if (current is HomeState.Ready && current.uri == uri) return@LaunchedEffect
+        state = HomeState.Loading
+        val metadata = withContext(Dispatchers.IO) { VideoProbe.read(context, uri) }
+        val latest = sessionViewModel.durableSource.value
+        if (latest.phase != DurableSourcePhase.BOUND || latest.contentUri != storedUri) return@LaunchedEffect
+        state = metadata.fold(
+            onSuccess = { HomeState.Ready(uri, it) },
+            onFailure = { HomeState.Error("تعذر إعادة فتح الفيديو المحفوظ. اختر المصدر مرة أخرى.") },
+        )
     }
 
     fun playSample(sample: AudioSampleResult) {
@@ -139,48 +166,17 @@ private fun App() {
         }
     }
 
-    fun runNvidiaSttTest(ready: HomeState.Ready) {
-        val sourceUri = ready.uri
+    fun runNvidiaStt(ready: HomeState.Ready) {
         val apiKeySnapshot = nvidiaApiKey.trim()
         if (apiKeySnapshot.isEmpty()) {
             Toast.makeText(context, "أدخل NVIDIA API Key أولًا", Toast.LENGTH_SHORT).show()
             return
         }
-
-        state = ready.copy(sttState = SttState.PreparingAudio)
-        scope.launch {
-            val profileResult = withContext(Dispatchers.IO) {
-                SttAudioPreparer.prepareFirstMinute(context, sourceUri)
-            }
-            var current = state
-            if (current !is HomeState.Ready || current.uri != sourceUri) return@launch
-
-            val profile = profileResult.getOrElse { error ->
-                state = current.copy(
-                    sttState = SttState.Error(error.message ?: "تعذر تجهيز WAV لـ NVIDIA")
-                )
-                return@launch
-            }
-
-            state = current.copy(sttState = SttState.Sending(profile))
-            val sttResult = withContext(Dispatchers.IO) {
-                NvidiaSttClient.transcribeEnglishSample(apiKeySnapshot, profile.file)
-            }
-
-            current = state
-            if (current !is HomeState.Ready || current.uri != sourceUri) return@launch
-            state = current.copy(
-                sttState = sttResult.fold(
-                    onSuccess = { SttState.Success(profile, it) },
-                    onFailure = {
-                        SttState.Error(
-                            message = it.message ?: "فشل اختبار NVIDIA STT",
-                            profile = profile,
-                        )
-                    },
-                )
-            )
+        if (durableSource.phase != DurableSourcePhase.BOUND || durableSource.contentUri != ready.uri.toString()) {
+            Toast.makeText(context, "انتظر اكتمال حفظ جلسة الفيديو أولًا", Toast.LENGTH_SHORT).show()
+            return
         }
+        sessionViewModel.runStt(apiKeySnapshot)
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -191,10 +187,16 @@ private fun App() {
         runCatching {
             context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        state = VideoProbe.read(context, uri).fold(
-            onSuccess = { HomeState.Ready(uri, it) },
-            onFailure = { HomeState.Error(it.message ?: "تعذر قراءة بيانات الفيديو") }
-        )
+        sessionViewModel.selectNewSource(uri.toString())
+        scope.launch {
+            val metadata = withContext(Dispatchers.IO) { VideoProbe.read(context, uri) }
+            val latest = sessionViewModel.durableSource.value
+            if (latest.contentUri != uri.toString()) return@launch
+            state = metadata.fold(
+                onSuccess = { HomeState.Ready(uri, it) },
+                onFailure = { HomeState.Error(it.message ?: "تعذر قراءة بيانات الفيديو") },
+            )
+        }
     }
 
     MaterialTheme {
@@ -210,29 +212,30 @@ private fun App() {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    "P0-E — معاينة الترجمة على الفيديو",
+                    "الترجمة والترجمة النصية — جلسة قابلة للاستئناف",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "بعد نجاح STT والترجمة، نربط أزمنة العينة بخط الفيديو الأصلي ونشغّل الفيديو مع الترجمة العربية فوقه لاختبار المزامنة بصريًا قبل الانتقال للفيديو الكامل."
+                    "اختيار الفيديو ونتيجة STT المقبولة أصبحا مرتبطين بجلسة دائمة. لا يُعاد إرسال طلب STT الناجح تلقائيًا بعد إغلاق التطبيق."
                 )
 
                 Button(
                     onClick = { picker.launch(arrayOf("video/*")) },
-                    enabled = (state as? HomeState.Ready)?.let {
-                        it.sampleState !is SampleState.Extracting &&
-                            it.sttState !is SttState.PreparingAudio && it.sttState !is SttState.Sending
-                    } ?: true,
-                    modifier = Modifier.fillMaxWidth()
+                    enabled = durableSource.phase != DurableSourcePhase.CAPTURING &&
+                        durableStt.phase != DurableSttPhase.RUNNING &&
+                        ((state as? HomeState.Ready)?.sampleState !is SampleState.Extracting),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("اختيار فيديو")
                 }
 
+                DurableSessionCard(durableSource, durableStt)
+
                 when (val s = state) {
-                    HomeState.Empty -> InfoCard("الحالة", "اختر فيديو، ثم اختبر العينة المحلية وNVIDIA STT.")
-                    HomeState.Loading -> InfoCard("الحالة", "جارٍ قراءة معلومات الفيديو…")
-                    is HomeState.Error -> InfoCard("تعذر الفحص", s.message)
+                    HomeState.Empty -> InfoCard("الحالة", "اختر فيديو لبدء جلسة جديدة، أو انتظر استرداد الجلسة السابقة إن وجدت.")
+                    HomeState.Loading -> InfoCard("الحالة", "جارٍ فتح معلومات الفيديو وربط الجلسة…")
+                    is HomeState.Error -> InfoCard("تعذر فتح الفيديو", s.message)
                     is HomeState.Ready -> {
                         VideoCard(s.metadata)
                         SampleCard(
@@ -241,38 +244,81 @@ private fun App() {
                             onPlay = ::playSample,
                         )
                         SttCard(
-                            state = s.sttState,
+                            state = durableStt,
                             apiKey = nvidiaApiKey,
+                            sourceReady = durableSource.phase == DurableSourcePhase.BOUND &&
+                                durableSource.contentUri == s.uri.toString(),
                             onApiKeyChange = { nvidiaApiKey = it },
-                            onRun = { runNvidiaSttTest(s) },
+                            onRun = { runNvidiaStt(s) },
                         )
-                        val success = s.sttState as? SttState.Success
-                        if (success != null) {
-                            key(success) {
+                        val liveResult = durableStt.legacyResult
+                        if (durableStt.phase == DurableSttPhase.LIVE_SUCCESS && liveResult != null) {
+                            key(liveResult) {
                                 TranslationCard(
-                                    result = success.result,
+                                    result = liveResult,
                                     apiKey = nvidiaApiKey,
                                     sourceUri = s.uri,
-                                    videoDurationMs = s.metadata.durationMs
-                                        ?: SubtitlePipeline.SAMPLE_END_MS,
+                                    videoDurationMs = s.metadata.durationMs ?: SubtitlePipeline.SAMPLE_END_MS,
                                     sampleStartMs = 0L,
                                 )
                             }
+                        } else if (durableStt.phase == DurableSttPhase.RECOVERED) {
+                            InfoCard(
+                                "تم استرداد STT",
+                                "تم استرداد النص المقبول دون طلب جديد. لن نعيد إنشاء توقيت كلمات قديم من التخمين؛ ميزات الترجمة المرتبطة بالتوقيت ستُفعّل بعد اكتمال عقد الساعة الموثّق.",
+                            )
                         }
                     }
                 }
 
                 InfoCard(
-                    "حدود هذه البوابة",
-                    "P0-E يختبر أول دقيقة فقط، وبداية العينة الحالية هي صفر على خط الفيديو. الهدف هو إثبات أن نفس timestamps تنتج SRT وتظهر فوق الفيديو في الموضع نفسه قبل بناء المعالجة الكاملة."
-                )
-                InfoCard(
-                    "المفتاح",
-                    "في هذا الـPrototype لا يُكتب NVIDIA API Key على القرص ولا داخل GitHub؛ يبقى في ذاكرة الشاشة فقط حتى نثبت العقد الفعلي. التخزين عبر Keystore يأتي في مرحلة الإعدادات."
+                    "الخصوصية والاسترداد",
+                    "مفتاح NVIDIA يبقى في ذاكرة الشاشة فقط ولا يُكتب إلى ملفات الجلسة. تحفظ الجلسة هويات المصدر والنتيجة المقبولة اللازمة للاسترداد، لا الاستجابة الخام من المزود.",
                 )
             }
         }
     }
+}
+
+@Composable
+private fun DurableSessionCard(source: DurableSourceUiState, stt: DurableSttUiState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("حالة الجلسة", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                when (source.phase) {
+                    DurableSourcePhase.NONE -> "لا توجد جلسة فيديو فعالة."
+                    DurableSourcePhase.CAPTURING -> "جارٍ تثبيت هوية الفيديو وحفظ الجلسة…"
+                    DurableSourcePhase.BOUND -> "✓ الفيديو مرتبط بجلسة دائمة ويمكن استئنافها."
+                    DurableSourcePhase.FAILED -> sourceFailureMessage(source.failure)
+                }
+            )
+            when (stt.phase) {
+                DurableSttPhase.UNKNOWN_REMOTE_OUTCOME -> Text(
+                    "حالة STT غير مؤكدة بعد الإرسال. لن يعاد الطلب تلقائيًا لتجنب تكرار التنفيذ أو التكلفة."
+                )
+                DurableSttPhase.RECOVERED -> Text("✓ تم استرداد نص STT المقبول محليًا دون اتصال جديد.")
+                DurableSttPhase.LIVE_SUCCESS -> Text("✓ تم حفظ نتيجة STT وربطها بالجلسة.")
+                else -> Unit
+            }
+        }
+    }
+}
+
+private fun sourceFailureMessage(failure: DurableSourceFailure?): String = when (failure) {
+    DurableSourceFailure.CAPTURE -> "تعذر قراءة الفيديو المختار وحفظ هويته. اختر الملف مرة أخرى."
+    DurableSourceFailure.PERSISTENCE -> "تعذر حفظ جلسة الفيديو بأمان."
+    DurableSourceFailure.ACTIVATION -> "تعذر جعل الجلسة الجديدة هي الجلسة الفعالة."
+    DurableSourceFailure.RESTORE -> "تعذر استرداد الجلسة المحفوظة."
+    DurableSourceFailure.CHECK_REQUIRED -> "يجب إعادة التحقق من المصدر قبل المتابعة."
+    DurableSourceFailure.PERMISSION_MISSING -> "فقد التطبيق إذن قراءة الفيديو. اختر المصدر مرة أخرى."
+    DurableSourceFailure.SOURCE_MISSING -> "ملف الفيديو المحفوظ لم يعد موجودًا. اختر موقعه من جديد."
+    DurableSourceFailure.SOURCE_CHANGED -> "محتوى الفيديو تغيّر منذ حفظ الجلسة. اختر المصدر الصحيح من جديد."
+    DurableSourceFailure.IO_FAILURE -> "تعذر قراءة الفيديو حاليًا."
+    DurableSourceFailure.UNSUPPORTED -> "مصدر الفيديو الحالي غير مدعوم للاسترداد."
+    DurableSourceFailure.CORRUPT -> "بيانات الجلسة المرتبطة بالمصدر تالفة؛ لن يستخدمها التطبيق بصمت."
+    DurableSourceFailure.STALE -> "حالة المصدر تغيّرت أثناء الاسترداد؛ أعد المحاولة."
+    null -> "تعذر استخدام المصدر المحفوظ."
 }
 
 @Composable
@@ -285,7 +331,7 @@ private fun VideoCard(metadata: VideoMetadata) {
             KeyValue("الدقة", metadata.resolutionLabel)
             KeyValue("الحجم", metadata.sizeLabel)
             Spacer(Modifier.height(4.dp))
-            Text("✓ تم حفظ إذن القراءة الدائم عندما يسمح مزود الملفات بذلك.")
+            Text("✓ يتحقق التطبيق من الوصول الحالي وهوية المحتوى عند الاستئناف.")
         }
     }
 }
@@ -301,7 +347,7 @@ private fun SampleCard(
             Text("عينة الصوت المحلية", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             when (state) {
                 SampleState.Idle -> {
-                    Text("اختبار P0-B: أول دقيقة من مسار الصوت بدون شبكة.")
+                    Text("يمكن استخراج أول دقيقة محليًا للاستماع والتحقق من الصوت دون شبكة.")
                     Button(onClick = onExtract, modifier = Modifier.fillMaxWidth()) {
                         Text("استخراج عينة 60 ثانية")
                     }
@@ -324,7 +370,6 @@ private fun SampleCard(
                     KeyValue("النوع", sample.mimeType)
                     KeyValue("المدة", sample.measuredDurationLabel)
                     KeyValue("الحجم", sample.sizeLabel)
-                    Text("الملف المؤقت: ${sample.file.name}")
                     Button(onClick = { onPlay(sample) }, modifier = Modifier.fillMaxWidth()) {
                         Text("تشغيل عينة الصوت")
                     }
@@ -339,15 +384,16 @@ private fun SampleCard(
 
 @Composable
 private fun SttCard(
-    state: SttState,
+    state: DurableSttUiState,
     apiKey: String,
+    sourceReady: Boolean,
     onApiKeyChange: (String) -> Unit,
     onRun: () -> Unit,
 ) {
-    val busy = state is SttState.PreparingAudio || state is SttState.Sending
+    val busy = state.phase == DurableSttPhase.RUNNING
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("اختبار NVIDIA STT", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("NVIDIA STT", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(NvidiaSttClient.MODEL_LABEL)
             OutlinedTextField(
                 value = apiKey,
@@ -359,46 +405,44 @@ private fun SttCard(
                 visualTransformation = PasswordVisualTransformation(),
             )
 
-            when (state) {
-                SttState.Idle -> Text("سيتم تجهيز WAV محليًا أولًا، ثم إرسال الصوت فقط إلى NVIDIA.")
-                SttState.PreparingAudio -> Text("جارٍ فك الصوت وتجهيز WAV PCM 16-bit mono…")
-                is SttState.Sending -> {
-                    Text("✓ WAV جاهز. جارٍ إرسال العينة إلى NVIDIA…")
-                    AudioProfileDetails(state.profile)
-                }
-                is SttState.Error -> {
-                    Text("فشل الاختبار: ${state.message}")
-                    val profile = state.profile
-                    if (profile != null) AudioProfileDetails(profile)
-                }
-                is SttState.Success -> {
-                    Text("✓ نجح NVIDIA STT.")
-                    AudioProfileDetails(state.profile)
-                    KeyValue("الكلمات", state.result.words.size.toString())
-                    state.result.firstWordStartMs?.let { KeyValue("أول توقيت", "${it}ms") }
-                    state.result.lastWordEndMs?.let { KeyValue("آخر توقيت", "${it}ms") }
+            when (state.phase) {
+                DurableSttPhase.IDLE -> Text("سيُحفظ intent قبل الإرسال؛ نجاح STT لن يعاد تلقائيًا بعد restart.")
+                DurableSttPhase.RUNNING -> Text("جارٍ تجهيز الصوت وإرسال طلب STT واحد…")
+                DurableSttPhase.LIVE_SUCCESS -> {
+                    val result = state.legacyResult!!
+                    Text("✓ نجح STT وحُفظت النتيجة في الجلسة.")
+                    KeyValue("الكلمات", result.words.size.toString())
+                    result.firstWordStartMs?.let { KeyValue("أول توقيت", "${it}ms") }
+                    result.lastWordEndMs?.let { KeyValue("آخر توقيت", "${it}ms") }
                     Text("النص:", fontWeight = FontWeight.SemiBold)
-                    Text(state.result.transcript)
+                    Text(result.transcript)
                 }
+                DurableSttPhase.RECOVERED -> {
+                    Text("✓ النص مستعاد من الجلسة دون إعادة طلب STT.")
+                    state.transcript?.let { Text(it) }
+                }
+                DurableSttPhase.UNKNOWN_REMOTE_OUTCOME -> Text(
+                    "لا يمكن تأكيد نتيجة الطلب السابق. لن يعيد التطبيق الإرسال تلقائيًا."
+                )
+                DurableSttPhase.FAILED -> Text(
+                    when (state.failure) {
+                        com.clw.aivideotranslator.session.DurableSttFailure.NO_BOUND_SOURCE -> "اربط فيديو صالحًا بالجلسة أولًا."
+                        com.clw.aivideotranslator.session.DurableSttFailure.RESTORE -> "تعذر استرداد نتيجة STT المحفوظة بأمان."
+                        else -> "تعذر إكمال STT. لم تُعتبر النتيجة نجاحًا محفوظًا."
+                    }
+                )
             }
 
+            val canSubmit = sourceReady && state.phase == DurableSttPhase.IDLE && apiKey.isNotBlank()
             Button(
                 onClick = onRun,
-                enabled = !busy,
+                enabled = canSubmit,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (busy) "جارٍ الاختبار…" else "تشغيل اختبار NVIDIA STT")
+                Text(if (busy) "جارٍ STT…" else "تشغيل NVIDIA STT")
             }
         }
     }
-}
-
-@Composable
-private fun AudioProfileDetails(profile: SttAudioProfile) {
-    KeyValue("WAV", "PCM ${profile.bitsPerSample}-bit mono")
-    KeyValue("العينة", "${profile.sampleRateHz} Hz")
-    KeyValue("المدة", profile.durationLabel)
-    KeyValue("الحجم", profile.sizeLabel)
 }
 
 @Composable
