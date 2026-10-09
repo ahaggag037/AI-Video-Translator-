@@ -10,12 +10,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TranslationRequestPlanStoreTest {
-    private fun plan() = TranslationPlanner.plan(
+    private fun plan(
+        unitId: String = "u0001",
+        text: String = "Hello world.",
+    ) = TranslationPlanner.plan(
         SemanticSourceUnit(
-            id = "u0001",
+            id = unitId,
             orderedWordIds = listOf("w000001", "w000002"),
-            sourceText = "Hello world.",
-            sourceTextHash = sha256Utf8("Hello world."),
+            sourceText = text,
+            sourceTextHash = sha256Utf8(text),
             sourceInterval = PresentationIntervalUs(PresentationTimeUs(0), PresentationTimeUs(1_000_000)),
             segmentationVersion = "legacy-parity-v1",
         )
@@ -46,6 +49,20 @@ class TranslationRequestPlanStoreTest {
         assertFalse(json.contains("endMs", ignoreCase = true))
         assertFalse(json.contains("audioInterval", ignoreCase = true))
         assertTrue(json.contains("Hello world."))
+    }
+
+    @Test fun restartIndexListsPublishedPlansDeterministicallyAndIgnoresOnlyTempFiles() = withRoot { root, store ->
+        val second = plan("u0002", "Second unit.")
+        val first = plan("u0001", "First unit.")
+        store.publish("session-1", second)
+        store.publish("session-1", first)
+        val unitDirectory = java.io.File(root, "session-1/plans/u0001")
+        java.io.File(unitDirectory, ".orphan.tmp").writeText("partial")
+
+        assertEquals(listOf(first, second), store.list("session-1"))
+
+        java.io.File(unitDirectory, "unexpected.bin").writeText("x")
+        assertTrue(runCatching { store.list("session-1") }.isFailure)
     }
 
     @Test fun identicalRepublishIsIdempotentButCollisionFailsClosed() = withRoot { root, store ->
