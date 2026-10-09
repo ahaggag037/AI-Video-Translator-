@@ -100,11 +100,9 @@ class DurableTranslationAttemptExecutorTest {
         }.exceptionOrNull()
 
         assertTrue(failure is UnknownTranslationRemoteOutcomeException)
-        assertEquals(
-            TransportOutcome.UNKNOWN_AFTER_SUBMISSION,
-            (failure as UnknownTranslationRemoteOutcomeException).transport,
-        )
-        assertEquals("transport crashed after possible submission", failure.cause?.message)
+        val unknown = failure as UnknownTranslationRemoteOutcomeException
+        assertEquals(TransportOutcome.UNKNOWN_AFTER_SUBMISSION, unknown.transport)
+        assertEquals("transport crashed after possible submission", unknown.cause?.message)
         assertEquals(1, submitCount)
         assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
     }
@@ -123,11 +121,9 @@ class DurableTranslationAttemptExecutorTest {
         }.exceptionOrNull()
 
         assertTrue(failure is UnknownTranslationRemoteOutcomeException)
-        assertEquals(
-            TransportOutcome.CANCELLED,
-            (failure as UnknownTranslationRemoteOutcomeException).transport,
-        )
-        assertTrue(failure.cause is CancellationException)
+        val unknown = failure as UnknownTranslationRemoteOutcomeException
+        assertEquals(TransportOutcome.CANCELLED, unknown.transport)
+        assertTrue(unknown.cause is CancellationException)
         assertEquals(listOf(RequestReceiptPhase.PREPARED, RequestReceiptPhase.SENT), persisted)
     }
 
