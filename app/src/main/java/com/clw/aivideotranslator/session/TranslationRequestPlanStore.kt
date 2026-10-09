@@ -59,6 +59,41 @@ internal class TranslationRequestPlanStore(
             readUnlocked(sessionId, unitId, requestSignature)
         }
 
+    /**
+     * Bounded restart index. Hidden temp files from a process death are ignored; every published
+     * visible path is strict and self-validating. Multiple historical request profiles may exist for
+     * one unit, so callers still select the plan whose signature matches the durable receipt/entry.
+     */
+    fun list(sessionId: String): List<TranslationRequestPlan> = synchronized(writerLock) {
+        require(isSafeId(sessionId)) { "invalid session id" }
+        validateSession(sessionId)
+        val plansRoot = File(sessionsRoot, "$sessionId/plans")
+        if (!plansRoot.exists()) return@synchronized emptyList()
+        require(plansRoot.isDirectory) { "request-plan root is not a directory" }
+        val unitDirectories = plansRoot.listFiles()?.sortedBy { it.name } ?: emptyList()
+        require(unitDirectories.size <= MAX_UNIT_DIRECTORIES) { "too many request-plan unit directories" }
+
+        val result = mutableListOf<TranslationRequestPlan>()
+        for (unitDirectory in unitDirectories) {
+            require(unitDirectory.isDirectory && isSafeId(unitDirectory.name)) {
+                "unexpected request-plan unit entry"
+            }
+            val visibleFiles = unitDirectory.listFiles()
+                ?.filterNot { it.name.startsWith('.') && it.name.endsWith(".tmp") }
+                ?.sortedBy { it.name }
+                ?: emptyList()
+            require(visibleFiles.size <= MAX_PLANS_PER_UNIT) { "too many request plans for unit" }
+            for (file in visibleFiles) {
+                require(file.isFile && file.name.endsWith(".json")) { "unexpected request-plan entry" }
+                val signature = file.name.removeSuffix(".json")
+                require(isSafeId(signature)) { "invalid request-plan file identity" }
+                result += readUnlocked(sessionId, unitDirectory.name, signature)
+                require(result.size <= MAX_PLANS_PER_SESSION) { "too many request plans in session" }
+            }
+        }
+        result
+    }
+
     private fun readUnlocked(
         sessionId: String,
         unitId: String,
@@ -86,5 +121,11 @@ internal class TranslationRequestPlanStore(
             "request-plan path identity mismatch"
         }
         return plan
+    }
+
+    private companion object {
+        const val MAX_UNIT_DIRECTORIES = 512
+        const val MAX_PLANS_PER_UNIT = 16
+        const val MAX_PLANS_PER_SESSION = 1_024
     }
 }
