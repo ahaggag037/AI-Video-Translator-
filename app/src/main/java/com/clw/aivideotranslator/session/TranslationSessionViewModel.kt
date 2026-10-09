@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.clw.aivideotranslator.NvidiaSttResult
+import com.clw.aivideotranslator.NvidiaTranslationClient
 import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicLong
@@ -99,6 +100,66 @@ data class DurableSttUiState(
     }
 }
 
+enum class DurableTranslationPhase {
+    IDLE,
+    RUNNING,
+    COMPLETE,
+    REVIEW_REQUIRED,
+    UNKNOWN_REMOTE_OUTCOME,
+    STALE,
+    FAILED,
+}
+
+data class DurableTranslationText(
+    val unitId: String,
+    val text: String,
+) {
+    init {
+        require(unitId.isNotBlank()) { "blank translation unit id" }
+        require(text.isNotBlank()) { "blank durable translation text" }
+    }
+}
+
+enum class DurableTranslationFailure {
+    NO_LIVE_STT,
+    NO_BOUND_SOURCE,
+    PROVIDER_OR_STORAGE,
+    RESTORE,
+    PROVIDER_REJECTED_OR_PENDING,
+}
+
+data class DurableTranslationUiState(
+    val phase: DurableTranslationPhase,
+    val sessionId: String? = null,
+    val texts: List<DurableTranslationText> = emptyList(),
+    val blockingUnitId: String? = null,
+    val failure: DurableTranslationFailure? = null,
+) {
+    init {
+        require(texts.map { it.unitId }.distinct().size == texts.size) { "duplicate durable translation unit" }
+        when (phase) {
+            DurableTranslationPhase.IDLE -> require(
+                sessionId == null && texts.isEmpty() && blockingUnitId == null && failure == null
+            )
+            DurableTranslationPhase.RUNNING -> require(
+                sessionId != null && blockingUnitId == null && failure == null
+            )
+            DurableTranslationPhase.COMPLETE -> require(
+                sessionId != null && texts.isNotEmpty() && blockingUnitId == null && failure == null
+            )
+            DurableTranslationPhase.REVIEW_REQUIRED,
+            DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME,
+            DurableTranslationPhase.STALE,
+            -> require(sessionId != null && blockingUnitId != null && failure == null)
+            DurableTranslationPhase.FAILED -> require(failure != null)
+        }
+    }
+
+    companion object {
+        fun idle() = DurableTranslationUiState(DurableTranslationPhase.IDLE)
+    }
+}
+
 internal fun interface DurableSttRunner {
     fun run(
         context: Context,
@@ -119,6 +180,10 @@ internal class TranslationSessionViewModel(
     private val store: TranslationSessionStore,
     private val sttRunner: DurableSttRunner = DurableSttRunner { appContext, sessionStore, sessionId, apiKey ->
         SourceSnapshotOperation.transcribeAndBindDetailed(appContext, sessionStore, sessionId, apiKey)
+    },
+    private val planStore: TranslationRequestPlanStore? = null,
+    private val translationSubmitterFactory: (String) -> TranslationPlanSubmitter = { apiKey ->
+        TranslationPlanSubmitter { plan -> NvidiaTranslationClient.translateDetailed(apiKey, plan) }
     },
 ) : ViewModel() {
     private val appContext = context.applicationContext
@@ -141,6 +206,9 @@ internal class TranslationSessionViewModel(
     private val mutableStt = MutableStateFlow(DurableSttUiState.idle())
     val stt = mutableStt.asStateFlow()
 
+    private val mutableTranslation = MutableStateFlow(DurableTranslationUiState.idle())
+    val translation = mutableTranslation.asStateFlow()
+
     init {
         resumeActiveSession()
     }
@@ -161,6 +229,7 @@ internal class TranslationSessionViewModel(
         cancelCurrent()
         val generation = sourceGeneration.incrementAndGet()
         mutableStt.value = DurableSttUiState.idle()
+        mutableTranslation.value = DurableTranslationUiState.idle()
         mutableDurableSource.value = DurableSourceUiState(
             phase = DurableSourcePhase.CAPTURING,
             contentUri = contentUri,
@@ -252,12 +321,9 @@ internal class TranslationSessionViewModel(
         // caller thread. BOUND is published from inside the still-running source-binding coroutine,
         // whose completion (which releases activeJob) is only queued behind that publication on the
         // main dispatcher. Gating on the caller thread raced with that completion bookkeeping and
-        // could silently drop the STT attempt, leaving `stt` in IDLE forever — observed as the 30s
-        // API35 timeout in liveSttResultIsPublishedFromOneRunnerInvocationAndSameDurableSnapshot.
+        // could silently drop the STT attempt, leaving `stt` in IDLE forever.
         scope.launch {
             if (sourceGeneration.get() != generation) return@launch
-            // A genuinely active operation (e.g. a duplicate STT tap) still owns the ViewModel;
-            // refuse exactly as the previous caller-thread gate did.
             if (!launchExclusive {
                 mutableStt.value = DurableSttUiState(DurableSttPhase.RUNNING, sessionId = sessionId)
                 val outcome = runCatching {
@@ -316,6 +382,84 @@ internal class TranslationSessionViewModel(
         }
     }
 
+    /**
+     * Executes the frozen P0-F translation request profile through the durable request/receipt path.
+     * Model output owns only translated text. The live legacy STT result remains the timing comparator
+     * until X001; this method never derives or persists subtitle timing.
+     */
+    fun runTranslation(apiKey: String) {
+        val source = mutableDurableSource.value
+        val currentStt = mutableStt.value
+        val sessionId = source.sessionId
+        if (source.phase != DurableSourcePhase.BOUND || sessionId == null) {
+            mutableTranslation.value = DurableTranslationUiState(
+                phase = DurableTranslationPhase.FAILED,
+                failure = DurableTranslationFailure.NO_BOUND_SOURCE,
+            )
+            return
+        }
+        val legacyResult = currentStt.legacyResult
+        if (currentStt.phase != DurableSttPhase.LIVE_SUCCESS || currentStt.sessionId != sessionId || legacyResult == null) {
+            mutableTranslation.value = DurableTranslationUiState(
+                phase = DurableTranslationPhase.FAILED,
+                sessionId = sessionId,
+                failure = DurableTranslationFailure.NO_LIVE_STT,
+            )
+            return
+        }
+        val requestPlanStore = planStore
+        if (requestPlanStore == null) {
+            mutableTranslation.value = DurableTranslationUiState(
+                phase = DurableTranslationPhase.FAILED,
+                sessionId = sessionId,
+                failure = DurableTranslationFailure.PROVIDER_OR_STORAGE,
+            )
+            return
+        }
+        val generation = sourceGeneration.get()
+        scope.launch {
+            if (sourceGeneration.get() != generation) return@launch
+            if (!launchExclusive {
+                mutableTranslation.value = DurableTranslationUiState(
+                    phase = DurableTranslationPhase.RUNNING,
+                    sessionId = sessionId,
+                )
+                val outcome = runCatching {
+                    withContext(Dispatchers.IO) {
+                        check(activeSessionOwner.readActiveSessionId() == sessionId) {
+                            "active session changed before translation"
+                        }
+                        requireCurrentSourceGeneration(generation)
+                        val units = LegacyParityTranslationPlanner.plan(legacyResult)
+                        val batch = DurableLegacyTranslationOperation(store, requestPlanStore).execute(
+                            sessionId = sessionId,
+                            units = units,
+                            submitter = translationSubmitterFactory(apiKey),
+                        ).getOrThrow()
+                        requireCurrentSourceGeneration(generation)
+                        check(activeSessionOwner.readActiveSessionId() == sessionId) {
+                            "active session changed after translation"
+                        }
+                        batch
+                    }
+                }
+                if (sourceGeneration.get() != generation) return@launchExclusive
+                outcome.fold(
+                    onSuccess = { batch -> publishTranslationBatch(sessionId, batch) },
+                    onFailure = { error ->
+                        if (error is CancellationException) return@fold
+                        mutableTranslation.value = DurableTranslationUiState(
+                            phase = DurableTranslationPhase.FAILED,
+                            sessionId = sessionId,
+                            texts = durableTranslationTextsOrEmpty(sessionId),
+                            failure = DurableTranslationFailure.PROVIDER_OR_STORAGE,
+                        )
+                    },
+                )
+            }) return@launch
+        }
+    }
+
     /** Fence controller/source publication before cancelling the owning coroutine. */
     fun cancelCurrent() {
         sourceGeneration.incrementAndGet()
@@ -331,6 +475,7 @@ internal class TranslationSessionViewModel(
         if (sessionId == null) {
             mutableDurableSource.value = DurableSourceUiState.none()
             mutableStt.value = DurableSttUiState.idle()
+            mutableTranslation.value = DurableTranslationUiState.idle()
             return
         }
         val durable = withContext(Dispatchers.IO) {
@@ -341,6 +486,9 @@ internal class TranslationSessionViewModel(
         }
         val attachment = durable.first
         val snapshot = durable.second
+        val restoredTranslation = withContext(Dispatchers.IO) {
+            restoreTranslationState(sessionId)
+        }
         if (attachment != null) {
             val sourceFailure = sourceFailureFor(controllerState.assessment?.source?.availability)
             mutableDurableSource.value = if (sourceFailure == null) {
@@ -375,12 +523,14 @@ internal class TranslationSessionViewModel(
                 )
                 else -> DurableSttUiState.idle()
             }
+            mutableTranslation.value = restoredTranslation
             return
         }
         val availability = controllerState.assessment?.source?.availability
         if (availability == SourceAvailability.UNBOUND || availability == SourceAvailability.LEGACY_UNBOUND) {
             mutableDurableSource.value = DurableSourceUiState.none()
             mutableStt.value = DurableSttUiState.idle()
+            mutableTranslation.value = DurableTranslationUiState.idle()
         } else if (controllerState.phase == SessionControllerPhase.FAILED || controllerState.assessment != null) {
             mutableDurableSource.value = DurableSourceUiState(
                 phase = DurableSourcePhase.FAILED,
@@ -392,6 +542,104 @@ internal class TranslationSessionViewModel(
                 sessionId = sessionId,
                 failure = DurableSttFailure.RESTORE,
             )
+            mutableTranslation.value = restoredTranslation
+        }
+    }
+
+    private fun restoreTranslationState(sessionId: String): DurableTranslationUiState = runCatching {
+        val manifest = store.readManifest(sessionId)
+        val texts = manifest.activeEntryRefs.keys.sorted().map { unitId ->
+            val entry = requireNotNull(store.readActiveEntry(sessionId, unitId)) { "active translation entry missing" }
+            DurableTranslationText(
+                unitId = unitId,
+                text = requireNotNull(entry.record.effectiveText()) { "active translation entry has no effective text" },
+            )
+        }
+        val activeIds = texts.mapTo(mutableSetOf()) { it.unitId }
+        val unresolved = store.listReceipts(sessionId).firstOrNull { receipt ->
+            receipt.phase == RequestReceiptPhase.SENT &&
+                receipt.epoch == manifest.epoch &&
+                receipt.unitId !in activeIds
+        }
+        when {
+            unresolved != null -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = unresolved.unitId,
+            )
+            texts.isNotEmpty() -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.COMPLETE,
+                sessionId = sessionId,
+                texts = texts,
+            )
+            else -> DurableTranslationUiState.idle()
+        }
+    }.getOrElse {
+        DurableTranslationUiState(
+            phase = DurableTranslationPhase.FAILED,
+            sessionId = sessionId,
+            failure = DurableTranslationFailure.RESTORE,
+        )
+    }
+
+    private fun durableTranslationTextsOrEmpty(sessionId: String): List<DurableTranslationText> =
+        runCatching {
+            val manifest = store.readManifest(sessionId)
+            manifest.activeEntryRefs.keys.sorted().map { unitId ->
+                val entry = requireNotNull(store.readActiveEntry(sessionId, unitId))
+                DurableTranslationText(unitId, requireNotNull(entry.record.effectiveText()))
+            }
+        }.getOrDefault(emptyList())
+
+    private fun publishTranslationBatch(sessionId: String, batch: DurableTranslationBatchResult) {
+        val texts = batch.units.mapNotNull { unit ->
+            unit.effectiveText?.let { DurableTranslationText(unit.unitId, it) }
+        }
+        if (batch.completed) {
+            require(texts.size == batch.units.size) { "completed translation batch is missing effective text" }
+            mutableTranslation.value = DurableTranslationUiState(
+                phase = DurableTranslationPhase.COMPLETE,
+                sessionId = sessionId,
+                texts = texts,
+            )
+            return
+        }
+        val blocker = requireNotNull(batch.units.lastOrNull()) { "incomplete translation batch has no blocker" }
+        mutableTranslation.value = when (blocker.disposition) {
+            DurableTranslationUnitDisposition.REVIEW_REQUIRED -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.REVIEW_REQUIRED,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = blocker.unitId,
+            )
+            DurableTranslationUnitDisposition.UNKNOWN_REMOTE_OUTCOME -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = blocker.unitId,
+            )
+            DurableTranslationUnitDisposition.STALE_STATE,
+            DurableTranslationUnitDisposition.AMBIGUOUS_RECEIPTS,
+            -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.STALE,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = blocker.unitId,
+            )
+            DurableTranslationUnitDisposition.REJECTED,
+            DurableTranslationUnitDisposition.PENDING,
+            DurableTranslationUnitDisposition.TERMINAL,
+            -> DurableTranslationUiState(
+                phase = DurableTranslationPhase.FAILED,
+                sessionId = sessionId,
+                texts = texts,
+                blockingUnitId = blocker.unitId,
+                failure = DurableTranslationFailure.PROVIDER_REJECTED_OR_PENDING,
+            )
+            DurableTranslationUnitDisposition.REUSED_ENTRY,
+            DurableTranslationUnitDisposition.ADOPTED,
+            -> error("completed translation disposition cannot block an incomplete batch")
         }
     }
 
@@ -438,11 +686,17 @@ internal class TranslationSessionViewModel(
         private val context: Context,
         private val activeSessionOwner: ActiveSessionOwner,
         private val store: TranslationSessionStore,
+        private val planStore: TranslationRequestPlanStore,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass == TranslationSessionViewModel::class.java) { "unsupported ViewModel class" }
-            return TranslationSessionViewModel(context, activeSessionOwner, store) as T
+            return TranslationSessionViewModel(
+                context = context,
+                activeSessionOwner = activeSessionOwner,
+                store = store,
+                planStore = planStore,
+            ) as T
         }
     }
 }
