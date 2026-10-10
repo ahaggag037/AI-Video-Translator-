@@ -1,6 +1,5 @@
 package com.clw.aivideotranslator.pipeline
 
-import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
@@ -73,7 +72,7 @@ class PcmWindowFileWriterTest {
         }
     }
 
-    @Test fun abortDeletesUnfinalizedAndFinalizedOperationFiles() {
+    @Test fun abortKeepsHandedOffWindowButDeletesWriterOwnedPartialTail() {
         val root = Files.createTempDirectory("pcm-window-abort").toFile()
         try {
             val windows = mutableListOf<ProductionSttAudioWindow>()
@@ -86,8 +85,11 @@ class PcmWindowFileWriterTest {
             )
             writer.append(ByteArray(1_500 * 2))
             assertEquals(1, windows.size)
-            writer.close() // close before finish = abort operation ownership.
-            assertTrue(root.listFiles().orEmpty().isEmpty())
+            val handedOff = windows.single().file
+            writer.close() // close before finish = abort only writer-owned work.
+
+            assertTrue(handedOff.isFile)
+            assertEquals(listOf(handedOff.canonicalFile), root.listFiles().orEmpty().map { it.canonicalFile })
         } finally {
             root.deleteRecursively()
         }
