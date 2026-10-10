@@ -1,8 +1,10 @@
 package com.clw.aivideotranslator.session
 
-import android.util.AtomicFile
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.UUID
 
 /** App-private field-test journal. It is deliberately separate from the canonical session manifest. */
 internal class FieldTestSttWindowJournalStore(
@@ -102,7 +104,7 @@ internal class FieldTestSttWindowJournalStore(
     }
 
     private fun read(file: File): FieldTestSttWindowReceipt {
-        val bytes = AtomicFile(file).openRead().use { input ->
+        val bytes = file.inputStream().use { input ->
             val output = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(4_096)
             while (true) {
@@ -121,16 +123,26 @@ internal class FieldTestSttWindowJournalStore(
     }
 
     private fun write(file: File, receipt: FieldTestSttWindowReceipt) {
-        val atomic = AtomicFile(file)
         val bytes = FieldTestSttWindowReceiptCodec.encode(receipt).toByteArray(Charsets.UTF_8)
-        var stream: FileOutputStream? = null
+        val parent = requireNotNull(file.parentFile) { "field-test STT receipt has no parent directory" }
+        require(parent.isDirectory) { "field-test STT receipt parent is missing" }
+        val temp = File(parent, ".${file.name}.${UUID.randomUUID()}.tmp")
         try {
-            stream = atomic.startWrite()
-            stream.write(bytes)
-            stream.flush()
-            atomic.finishWrite(stream)
+            FileOutputStream(temp).use { stream ->
+                stream.write(bytes)
+                stream.flush()
+                stream.fd.sync()
+            }
+            require(temp.length() == bytes.size.toLong()) { "field-test STT temp receipt size mismatch" }
+            Files.move(
+                temp.toPath(),
+                file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            require(file.isFile) { "field-test STT atomic receipt publish failed" }
         } catch (error: Throwable) {
-            stream?.let(atomic::failWrite)
+            if (temp.exists()) temp.delete()
             throw error
         }
     }
