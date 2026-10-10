@@ -19,6 +19,9 @@
         </provider>
         <activity
             android:name=".MainActivity"
+            android:exported="false" />
+        <activity
+            android:name=".FieldTestRound2Activity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -27,4 +30,3 @@
         </activity>
     </application>
 </manifest>
-
