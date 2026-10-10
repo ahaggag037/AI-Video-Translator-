@@ -33,6 +33,7 @@ object VideoProbe {
             val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
                 ?.toIntOrNull() ?: 0
             require(rotation in setOf(0, 90, 180, 270)) { "unsupported video rotation metadata: $rotation" }
+            val hasAudio = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
             VideoMetadata(
                 displayName = nameAndSize?.first ?: "video",
                 durationMs = duration,
@@ -40,6 +41,7 @@ object VideoProbe {
                 height = height,
                 sizeBytes = nameAndSize?.second,
                 rotationDegrees = rotation,
+                hasAudio = hasAudio,
             )
         } finally {
             retriever.release()
