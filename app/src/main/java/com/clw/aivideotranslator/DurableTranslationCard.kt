@@ -16,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,10 +30,11 @@ import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.transformer.Transformer
 import com.clw.aivideotranslator.session.DurableTranslationPhase
 import com.clw.aivideotranslator.session.DurableTranslationUiState
 import com.clw.aivideotranslator.session.DurableTranslationUnitDisposition
+import com.clw.aivideotranslator.subtitle.android.LivePresentationRasterSnapshot
+import com.clw.aivideotranslator.subtitle.android.LivePresentationRasterSnapshotFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -62,10 +64,13 @@ internal fun DurableTranslationCard(
     var savingSrt by remember { mutableStateOf(false) }
     var renderingVideo by remember { mutableStateOf(false) }
     var renderProgress by remember { mutableStateOf<Int?>(null) }
-    var activeTransformer by remember { mutableStateOf<Transformer?>(null) }
+    var activeExportSession by remember { mutableStateOf<SnapshotBurnedExportSession?>(null) }
     var burnedVideo by remember { mutableStateOf<BurnedVideoResult?>(null) }
     var pendingVideoSave by remember { mutableStateOf<File?>(null) }
     var savingVideo by remember { mutableStateOf(false) }
+    var rasterSnapshotResult by remember(sourceUri, state.sessionId) {
+        mutableStateOf<Result<LivePresentationRasterSnapshot>?>(null)
+    }
 
     val livePresentation = remember(
         state.phase,
@@ -89,6 +94,26 @@ internal fun DurableTranslationCard(
                 cues = cues,
                 srt = SubtitlePipeline.srt(cues, videoDurationMs),
             )
+        }
+    }
+    val liveReady = livePresentation?.getOrNull()
+
+    LaunchedEffect(sourceUri, state.sessionId, liveReady) {
+        rasterSnapshotResult = null
+        if (liveReady != null) {
+            rasterSnapshotResult = withContext(Dispatchers.IO) {
+                LivePresentationRasterSnapshotFactory.build(
+                    context = context.applicationContext,
+                    sourceUri = sourceUri,
+                    cues = liveReady.cues,
+                )
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            activeExportSession?.cancel()
         }
     }
 
@@ -145,9 +170,9 @@ internal fun DurableTranslationCard(
         }
     }
 
-    LaunchedEffect(activeTransformer, renderingVideo) {
+    LaunchedEffect(activeExportSession, renderingVideo) {
         while (isActive && renderingVideo) {
-            activeTransformer?.let { renderProgress = BurnedSubtitleExporter.progress(it) }
+            activeExportSession?.let { renderProgress = it.progress() }
             delay(500)
         }
     }
@@ -163,7 +188,7 @@ internal fun DurableTranslationCard(
                 )
                 DurableTranslationPhase.RUNNING -> Text("جارٍ ترجمة وحدات P0-F بالتتابع وحفظ تقدم كل طلب…")
                 DurableTranslationPhase.LIVE_SUCCESS -> Text(
-                    "✓ اكتملت الترجمة وحُفظت النتائج المقبولة. المعاينة والتصدير يستخدمان توقيت P0-F الحي نفسه."
+                    "✓ اكتملت الترجمة وحُفظت النتائج المقبولة. المعاينة والتصدير يستخدمان توقيت P0-F الحي ونفس raster snapshot."
                 )
                 DurableTranslationPhase.RECOVERED_TEXT_ONLY -> Text(
                     "✓ تم استرداد نصوص الترجمة المحفوظة دون طلبات جديدة. توقيت الكلمات الحي غير محفوظ قبل X001، لذلك لن ينشئ التطبيق معاينة أو SRT أو MP4 من توقيت مخمّن بعد restart."
@@ -216,57 +241,69 @@ internal fun DurableTranslationCard(
                         Text(
                             "✓ أزمنة SRT على خط الفيديو الأصلي. بداية العينة = ${SubtitlePipeline.timestamp(sampleStartMs)}"
                         )
-                        VideoSubtitlePreview(
-                            sourceUri = sourceUri,
-                            cues = ready.cues,
-                            sampleStartMs = sampleStartMs,
-                            sampleEndMs = sampleEndMs,
-                        )
 
-                        Button(
-                            enabled = !renderingVideo && !savingVideo && ready.cues.isNotEmpty(),
-                            onClick = {
-                                renderingVideo = true
-                                renderProgress = null
-                                burnedVideo = null
-                                runCatching {
-                                    BurnedSubtitleExporter.start(
-                                        context = context,
-                                        sourceUri = sourceUri,
-                                        cues = ready.cues,
-                                        sampleStartMs = sampleStartMs,
-                                        sampleEndMs = sampleEndMs,
-                                        onCompleted = { resultVideo ->
-                                            burnedVideo = resultVideo
-                                            renderingVideo = false
-                                            activeTransformer = null
-                                            renderProgress = 100
-                                        },
-                                        onError = { message ->
-                                            renderingVideo = false
-                                            activeTransformer = null
-                                            Toast.makeText(context, "فشل إنشاء MP4: $message", Toast.LENGTH_LONG).show()
-                                        },
-                                    )
-                                }.onSuccess { activeTransformer = it }
-                                    .onFailure {
-                                        renderingVideo = false
-                                        activeTransformer = null
-                                        Toast.makeText(
-                                            context,
-                                            "فشل بدء إنشاء MP4: ${it.message ?: "خطأ غير معروف"}",
-                                            Toast.LENGTH_LONG,
-                                        ).show()
-                                    }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("إنشاء فيديو MP4 مترجم — أول 60 ثانية") }
+                        val snapshotResult = rasterSnapshotResult
+                        when {
+                            snapshotResult == null -> Text("جارٍ تجهيز raster snapshot المشترك للمعاينة والتصدير…")
+                            snapshotResult.isFailure -> Text(
+                                "تعذر تجهيز layout/raster بأمان؛ SRT متاح لكن preview وMP4 متوقفان: " +
+                                    (snapshotResult.exceptionOrNull()?.message ?: "خطأ في renderer")
+                            )
+                            else -> {
+                                val snapshot = snapshotResult.getOrThrow()
+                                RasterVideoSubtitlePreview(
+                                    sourceUri = sourceUri,
+                                    snapshot = snapshot,
+                                    sampleStartMs = sampleStartMs,
+                                    sampleEndMs = sampleEndMs,
+                                )
+
+                                Button(
+                                    enabled = !renderingVideo && !savingVideo,
+                                    onClick = {
+                                        renderingVideo = true
+                                        renderProgress = null
+                                        burnedVideo = null
+                                        runCatching {
+                                            SnapshotBurnedSubtitleExporter.start(
+                                                context = context,
+                                                sourceUri = sourceUri,
+                                                snapshot = snapshot,
+                                                sampleStartMs = sampleStartMs,
+                                                sampleEndMs = sampleEndMs,
+                                                onCompleted = { resultVideo ->
+                                                    burnedVideo = resultVideo
+                                                    renderingVideo = false
+                                                    activeExportSession = null
+                                                    renderProgress = 100
+                                                },
+                                                onError = { message ->
+                                                    renderingVideo = false
+                                                    activeExportSession = null
+                                                    Toast.makeText(context, "فشل إنشاء MP4: $message", Toast.LENGTH_LONG).show()
+                                                },
+                                            )
+                                        }.onSuccess { activeExportSession = it }
+                                            .onFailure {
+                                                renderingVideo = false
+                                                activeExportSession = null
+                                                Toast.makeText(
+                                                    context,
+                                                    "فشل بدء إنشاء MP4: ${it.message ?: "خطأ غير معروف"}",
+                                                    Toast.LENGTH_LONG,
+                                                ).show()
+                                            }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text("إنشاء فيديو MP4 مترجم — أول 60 ثانية") }
+                            }
+                        }
 
                         if (renderingVideo) {
                             Text(renderProgress?.let { "تقدم إنشاء الفيديو: $it%" } ?: "جارٍ تجهيز محرك الفيديو…")
                             Button(onClick = {
-                                activeTransformer?.cancel()
-                                activeTransformer = null
+                                activeExportSession?.cancel()
+                                activeExportSession = null
                                 renderingVideo = false
                                 renderProgress = null
                             }) { Text("إلغاء إنشاء الفيديو") }
