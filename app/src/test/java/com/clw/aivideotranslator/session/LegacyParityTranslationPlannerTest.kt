@@ -26,7 +26,7 @@ class LegacyParityTranslationPlannerTest {
     @Test fun exactP0fSegmentationOrderTextAndIdentityArePreserved() {
         val source = result()
         val legacy = SubtitlePipeline.sourceUnits(source.words)
-        val planned = LegacyParityTranslationPlanner.plan(source)
+        val planned = LegacyParityTranslationPlanner.planFrozen(source)
 
         assertEquals(legacy.size, planned.size)
         assertEquals(legacy, planned.map { it.legacyUnit })
@@ -39,14 +39,14 @@ class LegacyParityTranslationPlannerTest {
 
     @Test fun everyLegacyWordIdIsConsumedOnceAndInOrder() {
         val source = result()
-        val planned = LegacyParityTranslationPlanner.plan(source)
+        val planned = LegacyParityTranslationPlanner.planFrozen(source)
         val ids = planned.flatMap { it.semanticUnit.orderedWordIds }
         assertEquals(LegacySubtitleBridge.sourceWords(source.words).map { it.id }, ids)
         assertEquals(ids.size, ids.toSet().size)
     }
 
     @Test fun plannerDoesNotReplaceLegacyGapOrSentenceBoundaries() {
-        val planned = LegacyParityTranslationPlanner.plan(result())
+        val planned = LegacyParityTranslationPlanner.planFrozen(result())
         assertEquals(2, planned.size)
         assertEquals("Hello world.", planned[0].requestPlan.exactSourceText)
         assertEquals("This is a durable test.", planned[1].requestPlan.exactSourceText)
@@ -57,7 +57,7 @@ class LegacyParityTranslationPlannerTest {
     }
 
     @Test fun durablePlanCarriesNoTimingFieldsAndNoSemanticSegmentationSwitch() {
-        val planned = LegacyParityTranslationPlanner.plan(result())
+        val planned = LegacyParityTranslationPlanner.planFrozen(result())
         planned.forEach { unit ->
             val encoded = TranslationRequestPlanCodec.encode(unit.requestPlan)
             assertFalse(encoded.contains("startMs"))
@@ -69,7 +69,7 @@ class LegacyParityTranslationPlannerTest {
     }
 
     @Test fun acceptanceSignatureTamperIsRejectedByLegacyAdoptionPolicy() {
-        val plan = LegacyParityTranslationPlanner.plan(result()).first().requestPlan
+        val plan = LegacyParityTranslationPlanner.planFrozen(result()).first().requestPlan
         assertFalse(
             LegacyParityTranslationPlanner.isLegacyAcceptanceSignatureValid(
                 plan.copy(acceptanceSignature = "0".repeat(64)),
