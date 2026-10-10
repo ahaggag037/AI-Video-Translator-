@@ -42,7 +42,7 @@ object SourceAttachmentAssembler {
         return SourceAttachment(
             sessionId = sessionId,
             contentUri = inspection.observedContentUri,
-            persistedReadGrantAtCapture = inspection.persistedGrantNow,
+            persistedReadGrantAtCapture = inspection.persistedReadGrantNow,
             fingerprint = fingerprint,
             durationUs = durationUs,
             selectedRange = range,
@@ -59,7 +59,7 @@ internal class SourceCaptureException(val status: SourceReadStatus, cause: Throw
  * Live telemetry from the exact copy+hash pass. Total source bytes are intentionally absent because
  * discovering them with another provider query/open would weaken the one-open identity boundary.
  */
-internal data class SourceCaptureProgress(
+data class SourceCaptureProgress(
     val copiedBytes: Long,
     val elapsedMs: Long,
     val bytesPerSecond: Double,
