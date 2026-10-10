@@ -11,9 +11,8 @@ import java.io.File
  *
  * This deliberately does not bind a canonical SourceSnapshot. Each deterministic source window has
  * its own durable PREPARED -> SENT -> RECEIVED receipt, so an app/process restart cannot blindly
- * resubmit a window whose remote outcome is unknown. RECEIVED results are reusable without another
- * provider call and are assembled onto the original presentation timeline only after every window
- * is accounted for.
+ * resubmit a window whose remote outcome is unknown. Window identity is derived from the actual
+ * decoded audio presentation interval, not from an assumed video-zero origin.
  */
 internal object FieldTestFullVideoSttOperation {
     fun transcribe(
@@ -26,14 +25,32 @@ internal object FieldTestFullVideoSttOperation {
         val attachment = requireNotNull(store.readActiveSourceAttachment(sessionId)) {
             "field-test full-video STT requires a bound source attachment"
         }
-        val plannedWindows = FieldTestSttWindowPlanner.plan(attachment.durationUs)
         val journal = FieldTestSttWindowJournalStore(
             File(context.filesDir, FIELD_TEST_JOURNAL_DIRECTORY),
         )
 
-        // Preflight every deterministic attempt before touching local media. A durable SENT receipt
-        // means the provider may already have accepted that exact window, so automatic repost is
-        // forbidden even if app/profile code changed after the crash.
+        val workDir = File(
+            context.cacheDir,
+            "$FIELD_TEST_WINDOW_DIRECTORY/${attachment.attachmentId}",
+        )
+        if (workDir.exists()) {
+            require(workDir.deleteRecursively()) { "cannot reset field-test STT window directory" }
+        }
+        val prepared = FieldTestFullAudioWindowPreparation.prepare(
+            context = context,
+            attachment = attachment,
+            outputDir = workDir,
+        ).getOrThrow()
+        val plannedWindows = prepared.windows.map { it.window }
+        require(plannedWindows.isNotEmpty()) { "full-video STT prepared no provider windows" }
+        require(plannedWindows.first().startUs >= 0L) { "first STT window has negative presentation time" }
+        require(plannedWindows.last().endUs <= attachment.durationUs) {
+            "last STT window exceeds source attachment"
+        }
+
+        // Local media decoding is safe to repeat. Remote submission is not. After deterministic
+        // windows are known, preflight the complete journal before any provider call so a SENT
+        // receipt anywhere in the batch prevents blind resubmission.
         val preflight = plannedWindows.associateWith { window ->
             val attemptId = FieldTestSttWindowAttemptIdentity.forWindow(
                 sessionId = sessionId,
@@ -61,22 +78,6 @@ internal object FieldTestFullVideoSttOperation {
         if (alreadyReceived.size == plannedWindows.size) {
             requireCurrentSource(context, attachment, "before recovered full-video STT assembly")
             return@runCatching FieldTestSttBatchAssembler.assemble(alreadyReceived)
-        }
-
-        val workDir = File(
-            context.cacheDir,
-            "$FIELD_TEST_WINDOW_DIRECTORY/${attachment.attachmentId}",
-        )
-        if (workDir.exists()) {
-            require(workDir.deleteRecursively()) { "cannot reset field-test STT window directory" }
-        }
-        val prepared = FieldTestFullAudioWindowPreparation.prepare(
-            context = context,
-            attachment = attachment,
-            outputDir = workDir,
-        ).getOrThrow()
-        require(prepared.windows.map { it.window } == plannedWindows) {
-            "prepared STT windows do not match deterministic source plan"
         }
 
         val requestProfileId = NvidiaSttWireContract.PROFILE.profileId
