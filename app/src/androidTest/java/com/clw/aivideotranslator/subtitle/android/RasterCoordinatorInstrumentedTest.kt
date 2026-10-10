@@ -8,6 +8,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -77,6 +78,50 @@ class RasterCoordinatorInstrumentedTest {
             lease.close()
         } finally {
             release.countDown()
+            coordinator.close()
+        }
+    }
+
+    @Test
+    fun supersededInFlightRasterCannotPublishStaleContentAndSeekBackRerenders() {
+        val enteredA = CountDownLatch(1)
+        val releaseA = CountDownLatch(1)
+        val staleBitmap = AtomicReference<Bitmap?>()
+        val aCalls = AtomicInteger(0)
+        val coordinator = RasterCoordinator(
+            producer = SubtitleRasterProducer { request ->
+                if (request.requestId == "a") {
+                    aCalls.incrementAndGet()
+                    if (aCalls.get() == 1) {
+                        enteredA.countDown()
+                        check(releaseA.await(2, TimeUnit.SECONDS))
+                    }
+                }
+                val ready = fakeReady(request)
+                if (request.requestId == "a" && aCalls.get() == 1) staleBitmap.set(ready.raster.bitmap)
+                ready
+            },
+        )
+        try {
+            val a = request("a", "ترجمة قديمة")
+            val b = request("b", "ترجمة جديدة")
+            coordinator.prepareWindow(a)
+            assertTrue(enteredA.await(1, TimeUnit.SECONDS))
+
+            coordinator.prepareWindow(b)
+            releaseA.countDown()
+            val bLease = (coordinator.awaitPrepared("b") as RasterAwaitResult.Ready).lease
+            bLease.close()
+
+            assertNull("superseded request must never be preview-visible", coordinator.peekPrepared("a"))
+            assertTrue("superseded produced bitmap must be recycled", requireNotNull(staleBitmap.get()).isRecycled)
+
+            coordinator.prepareWindow(a)
+            val seekBack = coordinator.awaitPrepared("a") as RasterAwaitResult.Ready
+            seekBack.lease.close()
+            assertEquals("seek-back must rerender instead of resurrecting stale ownership", 2, aCalls.get())
+        } finally {
+            releaseA.countDown()
             coordinator.close()
         }
     }

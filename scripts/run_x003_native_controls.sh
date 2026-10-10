@@ -63,6 +63,7 @@ methods=(
   packagedFontIsExactPinnedCandidateWithActualStyle
   nativeBoundaryProviderPreservesDiacriticAndProtectedUrl
   emergencyTokenWrapAndMissingGlyphCannotBecomeRenderable
+  mixedArabicNumeralsPunctuationAndMultilineRemainDeterministic
   recordNativeGeometryOutcomesWithoutInventingReadabilityPassRate
 )
 
