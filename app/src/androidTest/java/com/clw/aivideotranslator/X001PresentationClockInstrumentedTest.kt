@@ -1,6 +1,7 @@
 package com.clw.aivideotranslator
 
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
@@ -27,11 +28,11 @@ import org.junit.runner.RunWith
  * X001 Android presentation-origin falsifier.
  *
  * Reuses the existing synthetic 440 Hz AAC source-capture fixture, then remuxes its encoded packets
- * as the first audio track with a +500 ms presentation offset. A second one-packet audio anchor at
- * presentation zero prevents MediaMuxer from normalizing the only track back to zero. The test
- * observes the delayed first-track offset independently through MediaExtractor, runs the production
- * STT preparer, and proves that sample-zero in the prepared WAV maps back to the nonzero presentation
- * origin rather than silently assuming presentation zero.
+ * as the only audio track with a +500 ms presentation offset. A real AVC video sample at presentation
+ * zero anchors the container timeline without introducing a second audio track that MediaExtractor or
+ * SttAudioPreparer could select. The test observes the delayed audio origin independently through
+ * MediaExtractor, runs the production STT preparer, and proves that sample-zero in the prepared WAV
+ * maps back to the nonzero presentation origin rather than silently assuming presentation zero.
  */
 @RunWith(AndroidJUnit4::class)
 class X001PresentationClockInstrumentedTest {
@@ -53,7 +54,7 @@ class X001PresentationClockInstrumentedTest {
     @Test
     fun delayedContainerPtsBecomesPreparedSamplePresentationOrigin() {
         val original = copyFixture("tone_a.m4a")
-        val delayed = File(root, "tone_a_delayed.m4a")
+        val delayed = File(root, "tone_a_delayed.mp4")
         remuxAudioWithPresentationOffset(original, delayed, DELAY_US)
 
         val independentlyObservedStartUs = firstAudioSampleTimeUs(delayed)
@@ -79,7 +80,7 @@ class X001PresentationClockInstrumentedTest {
             presentationOrigin = PresentationTimeUs(independentlyObservedStartUs),
             precisionUs = 1L,
             status = ClockVerificationStatus.VERIFIED_AFFINE,
-            evidenceProfile = "android-mediamuxer-mediaextractor-delayed-aac-v2",
+            evidenceProfile = "android-mediamuxer-video-anchor-delayed-aac-v3",
         )
         val mapped = verifiedClock.mapVerified(
             AudioIntervalUs(AudioTimeUs(0L), AudioTimeUs(100_000L))
@@ -111,61 +112,134 @@ class X001PresentationClockInstrumentedTest {
 
     private fun remuxAudioWithPresentationOffset(source: File, output: File, offsetUs: Long) {
         val extractor = MediaExtractor()
+        val videoAnchor = encodeVideoAnchor()
         var muxer: MediaMuxer? = null
         var started = false
         try {
             extractor.setDataSource(source.absolutePath)
             val inputTrack = findAudioTrack(extractor)
-            val format = extractor.getTrackFormat(inputTrack)
+            val audioFormat = extractor.getTrackFormat(inputTrack)
             extractor.selectTrack(inputTrack)
 
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            // Keep the delayed source as container track zero because SttAudioPreparer deliberately
-            // selects the first audio track. The anchor track exists only to establish container time
-            // zero so MediaMuxer cannot rebase the delayed track's first sample back to zero.
-            val delayedTrack = muxer.addTrack(format)
-            val anchorTrack = muxer.addTrack(format)
+            val delayedAudioTrack = muxer.addTrack(audioFormat)
+            val videoTrack = muxer.addTrack(videoAnchor.format)
             muxer.start()
             started = true
 
+            val videoBuffer = ByteBuffer.wrap(videoAnchor.bytes)
+            val videoInfo = MediaCodec.BufferInfo().apply {
+                set(0, videoAnchor.bytes.size, 0L, videoAnchor.flags)
+            }
+            muxer.writeSampleData(videoTrack, videoBuffer, videoInfo)
+
             val buffer = ByteBuffer.allocate(MAX_ENCODED_SAMPLE_BYTES)
-            val delayedInfo = MediaCodec.BufferInfo()
-            val anchorInfo = MediaCodec.BufferInfo()
-            var anchorWritten = false
+            val audioInfo = MediaCodec.BufferInfo()
+            var audioPackets = 0
             while (true) {
                 buffer.clear()
                 val size = extractor.readSampleData(buffer, 0)
                 if (size < 0) break
                 val sourcePtsUs = extractor.sampleTime
                 require(sourcePtsUs >= 0L) { "fixture packet has no presentation time" }
-                val flags = extractor.sampleFlags
-
-                if (!anchorWritten) {
-                    buffer.position(0)
-                    buffer.limit(size)
-                    anchorInfo.set(0, size, 0L, flags)
-                    muxer.writeSampleData(anchorTrack, buffer, anchorInfo)
-                    anchorWritten = true
-                }
-
                 buffer.position(0)
                 buffer.limit(size)
-                delayedInfo.set(
+                audioInfo.set(
                     0,
                     size,
                     Math.addExact(sourcePtsUs, offsetUs),
-                    flags,
+                    extractor.sampleFlags,
                 )
-                muxer.writeSampleData(delayedTrack, buffer, delayedInfo)
+                muxer.writeSampleData(delayedAudioTrack, buffer, audioInfo)
+                audioPackets += 1
                 if (!extractor.advance()) break
             }
-            require(anchorWritten) { "fixture had no encoded packet for the presentation-zero anchor" }
+            require(audioPackets > 0) { "fixture had no encoded audio packets" }
         } finally {
             extractor.release()
             if (started) runCatching { muxer?.stop() }
             runCatching { muxer?.release() }
         }
-        require(output.isFile && output.length() > 0L) { "failed to build delayed AAC fixture" }
+        require(output.isFile && output.length() > 0L) { "failed to build delayed audio/video fixture" }
+    }
+
+    private fun encodeVideoAnchor(): EncodedVideoAnchor {
+        val codec = MediaCodec.createEncoderByType(VIDEO_MIME)
+        try {
+            val capabilities = codec.codecInfo.getCapabilitiesForType(VIDEO_MIME)
+            val colorFormat = listOf(
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible,
+            ).firstOrNull { it in capabilities.colorFormats }
+                ?: error("device AVC encoder has no byte-buffer YUV420 input format")
+
+            val inputFormat = MediaFormat.createVideoFormat(VIDEO_MIME, VIDEO_WIDTH, VIDEO_HEIGHT).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat)
+                setInteger(MediaFormat.KEY_BIT_RATE, 64_000)
+                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            }
+            codec.configure(inputFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.start()
+
+            val inputIndex = awaitInputBuffer(codec)
+            val input = requireNotNull(codec.getInputBuffer(inputIndex))
+            input.clear()
+            val frameBytes = VIDEO_WIDTH * VIDEO_HEIGHT * 3 / 2
+            repeat(VIDEO_WIDTH * VIDEO_HEIGHT) { input.put(16.toByte()) }
+            repeat(frameBytes - VIDEO_WIDTH * VIDEO_HEIGHT) { input.put(128.toByte()) }
+            codec.queueInputBuffer(inputIndex, 0, frameBytes, 0L, 0)
+
+            val eosIndex = awaitInputBuffer(codec)
+            codec.queueInputBuffer(
+                eosIndex,
+                0,
+                0,
+                33_333L,
+                MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+            )
+
+            var outputFormat: MediaFormat? = null
+            var encodedSample: ByteArray? = null
+            var encodedFlags = 0
+            val info = MediaCodec.BufferInfo()
+            repeat(MAX_CODEC_DRAIN_LOOPS) {
+                when (val outputIndex = codec.dequeueOutputBuffer(info, CODEC_TIMEOUT_US)) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> outputFormat = codec.outputFormat
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
+                    else -> if (outputIndex >= 0) {
+                        val encoded = requireNotNull(codec.getOutputBuffer(outputIndex))
+                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && info.size > 0 && encodedSample == null) {
+                            val bytes = ByteArray(info.size)
+                            encoded.position(info.offset)
+                            encoded.limit(info.offset + info.size)
+                            encoded.get(bytes)
+                            encodedSample = bytes
+                            encodedFlags = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv()
+                        }
+                        codec.releaseOutputBuffer(outputIndex, false)
+                    }
+                }
+                val format = outputFormat
+                val sample = encodedSample
+                if (format != null && sample != null) {
+                    return EncodedVideoAnchor(format, sample, encodedFlags)
+                }
+            }
+            error("AVC anchor encoder did not emit a format and sample")
+        } finally {
+            runCatching { codec.stop() }
+            codec.release()
+        }
+    }
+
+    private fun awaitInputBuffer(codec: MediaCodec): Int {
+        repeat(MAX_CODEC_DRAIN_LOOPS) {
+            val index = codec.dequeueInputBuffer(CODEC_TIMEOUT_US)
+            if (index >= 0) return index
+        }
+        error("AVC anchor encoder did not expose an input buffer")
     }
 
     private fun findAudioTrack(extractor: MediaExtractor): Int =
@@ -189,9 +263,20 @@ class X001PresentationClockInstrumentedTest {
         return sqrt(sumSquares / count.toDouble())
     }
 
+    private data class EncodedVideoAnchor(
+        val format: MediaFormat,
+        val bytes: ByteArray,
+        val flags: Int,
+    )
+
     private companion object {
         const val DELAY_US = 500_000L
         const val WAV_HEADER_BYTES = 44
         const val MAX_ENCODED_SAMPLE_BYTES = 256 * 1024
+        const val VIDEO_MIME = "video/avc"
+        const val VIDEO_WIDTH = 16
+        const val VIDEO_HEIGHT = 16
+        const val CODEC_TIMEOUT_US = 10_000L
+        const val MAX_CODEC_DRAIN_LOOPS = 500
     }
 }
