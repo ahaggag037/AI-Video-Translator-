@@ -12,7 +12,11 @@ class X002ContextCorpusTest {
 
     @Test fun boundedContextFixtureIsSourceOnlyAndBounded() {
         val corpus = resource("translation_v1/quality_corpus.json").getJSONArray("cases")
-        val corpusIds = (0 until corpus.length()).map { corpus.getJSONObject(it).getString("id") }.toSet()
+        val corpusById = (0 until corpus.length()).associate { index ->
+            val item = corpus.getJSONObject(index)
+            item.getString("id") to item.getString("source")
+        }
+        val corpusIds = corpusById.keys
         val root = resource("translation_v1/x002_context_windows.json")
         assertEquals(1, root.getInt("schemaVersion"))
         val cases = root.getJSONArray("cases")
@@ -37,6 +41,22 @@ class X002ContextCorpusTest {
             listOf("target", "referenceArabic", "score", "legacyText", "semanticText").forEach { forbidden ->
                 assertFalse("context fixture leaked $forbidden", item.has(forbidden))
             }
+
+            val request = X002SemanticRequestPlanner.plan(
+                target = X002SourceContextUnit("target:$id", requireNotNull(corpusById[id])),
+                beforeContext = (0 until (before?.length() ?: 0)).map { sideIndex ->
+                    X002SourceContextUnit("before:$id:$sideIndex", requireNotNull(before).getString(sideIndex))
+                },
+                afterContext = (0 until (after?.length() ?: 0)).map { sideIndex ->
+                    X002SourceContextUnit("after:$id:$sideIndex", requireNotNull(after).getString(sideIndex))
+                },
+                mode = X002SemanticRequestMode.BOUNDED_SOURCE_CONTEXT,
+            )
+            assertEquals(X002SemanticRequestMode.BOUNDED_SOURCE_CONTEXT, request.mode)
+            assertTrue(request.providerUserContent.contains(requireNotNull(corpusById[id])))
+            assertTrue(request.providerUserContent.length <= X002SemanticRequestPlanner.MAX_PROVIDER_USER_CHARS)
+            assertTrue(request.providerRequestSignature.isNotBlank())
+            assertTrue(request.bindingSignature.isNotBlank())
         }
     }
 }
