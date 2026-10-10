@@ -83,6 +83,37 @@ object NvidiaSttClient {
     }
 
     /**
+     * Production streaming transport for an immutable finalized STT window.
+     *
+     * The caller computes/persists [sampleSha256] before SENT. The finalized window is then streamed
+     * directly by OkHttp from the app-private file instead of being duplicated with `readBytes()` on
+     * the Java heap. The file size/mtime fence makes accidental owner mutation during transport fail
+     * closed. This does not change request semantics or timing interpretation.
+     */
+    internal fun transcribeEnglishSampleDetailedStreaming(
+        apiKey: String,
+        wavFile: File,
+        sampleSha256: String,
+    ): Result<NvidiaSttTransportObservation> = runCatching {
+        val cleanKey = apiKey.trim()
+        require(cleanKey.isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
+        require(wavFile.isFile && wavFile.length() > 44L) { "ملف WAV غير صالح" }
+        require(sampleSha256.length == 64 && sampleSha256.all { it in '0'..'9' || it in 'a'..'f' }) {
+            "STT sample SHA-256 is invalid"
+        }
+        val expectedLength = wavFile.length()
+        val expectedLastModified = wavFile.lastModified()
+        val request = NvidiaSttWireContract.request(cleanKey, wavFile)
+
+        client.newCall(request).execute().use { response ->
+            require(wavFile.isFile && wavFile.length() == expectedLength &&
+                wavFile.lastModified() == expectedLastModified
+            ) { "prepared STT window changed during streaming transport" }
+            bindDetailedResponse(response.body.string(), response.code, sampleSha256)
+        }
+    }
+
+    /**
      * Single response-handling point for the durable STT path. Separated from the network call so
      * the failure/binding contract is unit-testable without a provider. Failure semantics mirror
      * the legacy handler exactly; a non-2xx status yields an exception, never an observation.
