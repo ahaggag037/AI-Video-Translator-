@@ -13,11 +13,11 @@ jobs:
       matrix:
         api-level: [29, 35]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 7c71c77e0b6f89a73f352da25d531c996c85a004
+          ref: a64e007a706ad60e7b03a0847498924a6f16a29a
 
       - uses: actions/setup-java@v5
         with:
@@ -50,13 +50,16 @@ jobs:
           profile: pixel_7_pro
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
-          script: gradle --stacktrace :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.clw.aivideotranslator.X001PresentationClockInstrumentedTest,com.clw.aivideotranslator.session.X001NullTimingDurabilityInstrumentedTest,com.clw.aivideotranslator.session.X001NullTimingViewModelInstrumentedTest
+          script: |
+            gradle --stacktrace :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.clw.aivideotranslator.X001PresentationClockInstrumentedTest
+            gradle --stacktrace :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.clw.aivideotranslator.session.X001NullTimingDurabilityInstrumentedTest
+            gradle --stacktrace :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.clw.aivideotranslator.session.X001NullTimingViewModelInstrumentedTest
 
       - name: Upload X001 verification reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pr10-x001-api${{ matrix.api-level }}
+          name: pr10-x001-patched-api${{ matrix.api-level }}
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
