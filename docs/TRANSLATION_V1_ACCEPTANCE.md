@@ -6,6 +6,7 @@
 
 - Repository: `ahaggag037/AI-Video-Translator-`
 - Active branch: `build/p0g-gpt6-cleanroom-v1`
+- Active final-release orchestration: `docs/RELEASE_ORCHESTRATION.md`
 - Frozen P0-F baseline: `build/p0f-hardburn-mp4` @ `861aadcb36cccee83d2c86e9a0c0a03b1efe6720`
 - Accepted architecture deltas: `docs/TRANSLATION_V1_ARCHITECTURE_AMENDMENTS.md`
 - Frozen regression evidence: `docs/P0F_REGRESSION_BASELINE.md`
@@ -69,6 +70,8 @@ This checkpoint descends from the already-activated Task17 durable source/STT/le
 
 The canonical branch has completed Task17 ownership activation and advanced X004 into production wiring without declaring the gate PASS. Performance qualification has begun on isolated X006 branches and must remain non-authoritative until its evidence is reviewed and deliberately integrated.
 
+The final release push is now split across four isolated worker branches under `docs/RELEASE_ORCHESTRATION.md`; worker output is non-authoritative until reviewed and integrated by the release leader.
+
 Do not revive old worker TODOs, model relays, historical branch frontiers, or superseded handoff instructions as current authority.
 
 ## Documentation retention policy
@@ -76,6 +79,7 @@ Do not revive old worker TODOs, model relays, historical branch frontiers, or su
 Keep in the active branch only:
 - this current-state/acceptance index;
 - the concise repository `README.md`;
+- active release orchestration while the final push is in progress;
 - accepted architecture amendments;
 - frozen regression evidence still needed for comparison;
 - experiment evidence that supports reproducibility/auditability.
