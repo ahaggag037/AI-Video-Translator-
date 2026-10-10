@@ -24,6 +24,19 @@ class TextPolicyTest {
         }
     }
 
+    @Test fun protectedOffsetsRemainValidAfterCanonicalWhitespaceTrim() {
+        val raw = "   https://example.com/x ثم test+tag@example.com   "
+        val view = TextPolicy.canonicalView(raw)
+        assertEquals("https://example.com/x ثم test+tag@example.com", view.displayCanonical)
+        assertEquals(2, view.protectedRanges.size)
+        assertEquals(
+            listOf("https://example.com/x", "test+tag@example.com"),
+            view.protectedRanges.map { range ->
+                view.displayCanonical.substring(range.start, range.endExclusive)
+            },
+        )
+    }
+
     @Test fun preservesJoinersAndFlagsBidiOverridesForReview() {
         val joiners = TextPolicy.canonicalView("ع\u200Dر\u200Cبي")
         assertTrue(joiners.displayCanonical.contains('\u200D'))
