@@ -7,6 +7,7 @@ data class VideoMetadata(
     val height: Int?,
     val sizeBytes: Long?,
     val rotationDegrees: Int = 0,
+    val hasAudio: Boolean = false,
 ) {
     init {
         require(rotationDegrees in setOf(0, 90, 180, 270)) { "unsupported video rotation" }
