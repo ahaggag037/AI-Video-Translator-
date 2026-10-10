@@ -1,0 +1,21 @@
+name: Verify PR11 W2 Blind Evaluation Tooling
+
+on:
+  push:
+    branches: [ 'build/verify-pr11-w2-python' ]
+    paths:
+      - '.github/workflows/verify-pr11-w2-python.yml'
+
+jobs:
+  blind-eval-tooling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: a2d01c3bfb36b4fb861b6e22694b81093c57be82
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run X002 blind evaluation unit tests
+        run: python -m unittest scripts/test_x002_blind_eval.py -v
