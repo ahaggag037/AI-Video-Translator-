@@ -1,5 +1,7 @@
 package com.clw.aivideotranslator.semantic
 
+import com.clw.aivideotranslator.provider.ContentValidationOutcome
+import com.clw.aivideotranslator.provider.PolicyOutcome
 import com.clw.aivideotranslator.provider.ProtocolOutcome
 import com.clw.aivideotranslator.provider.TranslationProviderOutcome
 import com.clw.aivideotranslator.provider.TransportOutcome
@@ -145,7 +147,10 @@ object X002SemanticResponseValidator {
             return X002SemanticResult(request.targetUnitId, X002SemanticResultState.STALE_RESULT)
         }
         val outcome = envelope.providerOutcome
-        if (outcome.transport != TransportOutcome.RESPONSE_RECEIVED) {
+        if (outcome.transport != TransportOutcome.RESPONSE_RECEIVED ||
+            outcome.policy != PolicyOutcome.ALLOWED ||
+            outcome.contentValidation == ContentValidationOutcome.STRUCTURAL_FAILURE
+        ) {
             return X002SemanticResult(request.targetUnitId, X002SemanticResultState.NO_CANDIDATE)
         }
         return when (outcome.protocol) {
