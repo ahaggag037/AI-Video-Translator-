@@ -18,13 +18,14 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class StreamingSttAudioWindowProducerInstrumentedTest {
     @Test fun syntheticAacDecodesIntoEarlyBoundedWindowsWithoutFullVideoWav() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
         val root = File(context.cacheDir, "x006-streaming-${UUID.randomUUID()}").apply {
             check(mkdirs() || isDirectory)
         }
         try {
             val retainedFile = File(root, "retained-source.m4a")
-            context.assets.open("source_capture/tone_a.m4a").use { input ->
+            instrumentation.context.assets.open("source_capture/tone_a.m4a").use { input ->
                 retainedFile.outputStream().use { output -> input.copyTo(output) }
             }
             assertEquals(9_307L, retainedFile.length())
