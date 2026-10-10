@@ -135,7 +135,7 @@ internal fun DurableTranslationCard(
                 savingSrt = false
                 Toast.makeText(
                     context,
-                    if (saved.isSuccess) "تم حفظ sample_ar_video_timeline.srt" else "تعذر حفظ SRT؛ أعد المحاولة",
+                    if (saved.isSuccess) "تم حفظ ملف الترجمة SRT" else "تعذر حفظ SRT؛ أعد المحاولة",
                     Toast.LENGTH_LONG,
                 ).show()
             }
@@ -162,7 +162,7 @@ internal fun DurableTranslationCard(
                 savingVideo = false
                 Toast.makeText(
                     context,
-                    if (saved.isSuccess) "تم حفظ ${BurnedSubtitleExporter.DEFAULT_FILE_NAME} كفيديو MP4" else
+                    if (saved.isSuccess) "تم حفظ الفيديو المترجم بصيغة MP4" else
                         "تعذر حفظ الفيديو؛ ملف الرندر ما زال موجودًا داخل التطبيق",
                     Toast.LENGTH_LONG,
                 ).show()
@@ -179,31 +179,33 @@ internal fun DurableTranslationCard(
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("الترجمة العربية — جلسة دائمة")
-            Text(NvidiaTranslationClient.MODEL_ID)
+            Text("الترجمة العربية")
+            Text("هذه النسخة التجريبية تعالج أول 60 ثانية فقط. توسيع المعالجة إلى الفيديو الكامل هو الخطوة التالية في جولة الاختبار.")
 
             when (state.phase) {
                 DurableTranslationPhase.IDLE -> Text(
-                    "لم تبدأ الترجمة بعد. كل وحدة ستُحفظ قبل الإرسال ولن يعاد POST تلقائيًا إذا أصبحت النتيجة البعيدة غير مؤكدة."
+                    "الترجمة جاهزة للبدء بعد نجاح تفريغ الصوت."
                 )
-                DurableTranslationPhase.RUNNING -> Text("جارٍ ترجمة وحدات P0-F بالتتابع وحفظ تقدم كل طلب…")
+                DurableTranslationPhase.RUNNING -> Text(
+                    "جارٍ ترجمة أول 60 ثانية. بعد اكتمال الترجمة وتجهيز المعاينة سيظهر زر إنشاء MP4 هنا تلقائيًا."
+                )
                 DurableTranslationPhase.LIVE_SUCCESS -> Text(
-                    "✓ اكتملت الترجمة وحُفظت النتائج المقبولة. المعاينة والتصدير يستخدمان توقيت P0-F الحي ونفس raster snapshot."
+                    "✓ اكتملت الترجمة. جارٍ تجهيز المعاينة وخيارات التصدير."
                 )
                 DurableTranslationPhase.RECOVERED_TEXT_ONLY -> Text(
-                    "✓ تم استرداد نصوص الترجمة المحفوظة دون طلبات جديدة. توقيت الكلمات الحي غير محفوظ قبل X001، لذلك لن ينشئ التطبيق معاينة أو SRT أو MP4 من توقيت مخمّن بعد restart."
+                    "✓ تم استرداد نص الترجمة، لكن توقيت الكلمات الحي غير متاح بعد إعادة فتح التطبيق؛ لذلك المعاينة وMP4 غير متاحين لهذه الجلسة المستردة."
                 )
                 DurableTranslationPhase.UNKNOWN_REMOTE_OUTCOME -> Text(
-                    "نتيجة إحدى وحدات الترجمة غير مؤكدة بعد SENT. لن يعيد التطبيق إرسالها تلقائيًا لتجنب تكرار التنفيذ أو التكلفة."
+                    "حالة طلب الترجمة السابق غير مؤكدة. لن يعيد التطبيق إرسال الطلب تلقائيًا لتجنب التكرار."
                 )
                 DurableTranslationPhase.BLOCKED -> Text(translationBlockerMessage(state.blocker))
                 DurableTranslationPhase.FAILED -> Text(
                     when (state.failure) {
                         com.clw.aivideotranslator.session.DurableTranslationFailure.NO_LIVE_STT ->
-                            "يلزم نجاح STT حي في هذه العملية حتى نملك توقيت P0-F الموثوق للمعاينة والتصدير."
+                            "يلزم نجاح تفريغ الصوت في الجلسة الحالية قبل الترجمة والمعاينة والتصدير."
                         com.clw.aivideotranslator.session.DurableTranslationFailure.RESTORE ->
-                            "تعذر استرداد حالة الترجمة الدائمة بأمان. لن يستخدم التطبيق بيانات مشتبهًا بها."
-                        else -> "تعذر إكمال الترجمة. راجع الاتصال/المفتاح ثم أعد المحاولة؛ السجل الدائم سيمنع إعادة POST غير الآمنة."
+                            "تعذر استرداد حالة الترجمة بأمان."
+                        else -> "تعذر إكمال الترجمة. راجع الاتصال والمفتاح ثم أعد المحاولة."
                     }
                 )
             }
@@ -219,35 +221,33 @@ internal fun DurableTranslationCard(
                 onClick = onTranslate,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (state.phase == DurableTranslationPhase.RUNNING) "جارٍ الترجمة…" else "ترجمة العينة إلى العربية")
+                Text(if (state.phase == DurableTranslationPhase.RUNNING) "جارٍ الترجمة…" else "ترجمة أول 60 ثانية إلى العربية")
             }
 
             if (state.entries.isNotEmpty() && state.phase != DurableTranslationPhase.LIVE_SUCCESS) {
-                Text("الترجمات المحفوظة المتاحة:")
+                Text("الترجمة المحفوظة:")
                 state.entries.forEach { entry ->
                     SelectionContainer {
-                        Text("${entry.sourceUnitId}: ${entry.translatedText}")
+                        Text(entry.translatedText, style = TextStyle(textDirection = TextDirection.ContentOrRtl))
                     }
                 }
             }
 
             when (val presentation = livePresentation) {
                 null -> if (state.phase == DurableTranslationPhase.LIVE_SUCCESS) {
-                    Text("تعذر بناء معاينة التوقيت من النتائج الحية؛ لن يتم التصدير.")
+                    Text("تعذر تجهيز المعاينة من توقيت الجلسة الحالية؛ لذلك لن يظهر تصدير MP4 حتى تُحل مشكلة التوقيت.")
                 }
                 else -> presentation.fold(
                     onSuccess = { ready ->
                         val sampleEndMs = minOf(videoDurationMs, sampleStartMs + SubtitlePipeline.SAMPLE_END_MS)
-                        Text(
-                            "✓ أزمنة SRT على خط الفيديو الأصلي. بداية العينة = ${SubtitlePipeline.timestamp(sampleStartMs)}"
-                        )
+                        Text("المعاينة والتصدير — أول 60 ثانية")
 
                         val snapshotResult = rasterSnapshotResult
                         when {
-                            snapshotResult == null -> Text("جارٍ تجهيز raster snapshot المشترك للمعاينة والتصدير…")
+                            snapshotResult == null -> Text("جارٍ تجهيز المعاينة قبل إتاحة تصدير MP4…")
                             snapshotResult.isFailure -> Text(
-                                "تعذر تجهيز layout/raster بأمان؛ SRT متاح لكن preview وMP4 متوقفان: " +
-                                    (snapshotResult.exceptionOrNull()?.message ?: "خطأ في renderer")
+                                "تعذر تجهيز المعاينة المرئية؛ SRT متاح لكن MP4 متوقف: " +
+                                    (snapshotResult.exceptionOrNull()?.message ?: "خطأ في الرسم")
                             )
                             else -> {
                                 val snapshot = snapshotResult.getOrThrow()
@@ -258,6 +258,7 @@ internal fun DurableTranslationCard(
                                     sampleEndMs = sampleEndMs,
                                 )
 
+                                Text("✓ المعاينة جاهزة. يمكنك الآن إنشاء فيديو MP4 مترجم لأول 60 ثانية.")
                                 Button(
                                     enabled = !renderingVideo && !savingVideo,
                                     onClick = {
@@ -391,25 +392,19 @@ internal fun DurableTranslationCard(
                             }
                         }) { Text("مشاركة SRT فقط") }
 
-                        ready.units.zip(ready.cues).forEach { (unit, cue) ->
+                        ready.units.zip(ready.cues).forEachIndexed { index, (unit, _) ->
                             val entry = state.entries.first { it.sourceUnitId == unit.id }
                             SelectionContainer {
                                 Column {
-                                    Text(
-                                        "${unit.id}: ${SubtitlePipeline.timestamp(cue.startMs)} → ${SubtitlePipeline.timestamp(cue.endMs)}",
-                                        style = TextStyle(textDirection = TextDirection.Ltr),
-                                    )
+                                    Text("المقطع ${index + 1}")
                                     Text(unit.sourceText, style = TextStyle(textDirection = TextDirection.Ltr))
                                     Text(entry.translatedText, style = TextStyle(textDirection = TextDirection.ContentOrRtl))
                                 }
                             }
                         }
-                        SelectionContainer {
-                            Text(ready.srt, style = TextStyle(textDirection = TextDirection.Ltr))
-                        }
                     },
                     onFailure = { error ->
-                        Text("تعذر بناء preview/export بأمان: ${error.message ?: "خطأ في التوقيت"}")
+                        Text("تعذر بناء المعاينة والتصدير بأمان: ${error.message ?: "خطأ في التوقيت"}")
                     },
                 )
             }
