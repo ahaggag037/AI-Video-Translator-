@@ -27,9 +27,11 @@ import org.junit.runner.RunWith
  * X001 Android presentation-origin falsifier.
  *
  * Reuses the existing synthetic 440 Hz AAC source-capture fixture, then remuxes its encoded packets
- * with a +500 ms presentation offset. The test observes that offset independently through
- * MediaExtractor, runs the production STT preparer, and proves that sample-zero in the prepared WAV
- * maps back to the nonzero presentation origin rather than silently assuming presentation zero.
+ * as the first audio track with a +500 ms presentation offset. A second one-packet audio anchor at
+ * presentation zero prevents MediaMuxer from normalizing the only track back to zero. The test
+ * observes the delayed first-track offset independently through MediaExtractor, runs the production
+ * STT preparer, and proves that sample-zero in the prepared WAV maps back to the nonzero presentation
+ * origin rather than silently assuming presentation zero.
  */
 @RunWith(AndroidJUnit4::class)
 class X001PresentationClockInstrumentedTest {
@@ -77,7 +79,7 @@ class X001PresentationClockInstrumentedTest {
             presentationOrigin = PresentationTimeUs(independentlyObservedStartUs),
             precisionUs = 1L,
             status = ClockVerificationStatus.VERIFIED_AFFINE,
-            evidenceProfile = "android-mediamuxer-mediaextractor-delayed-aac-v1",
+            evidenceProfile = "android-mediamuxer-mediaextractor-delayed-aac-v2",
         )
         val mapped = verifiedClock.mapVerified(
             AudioIntervalUs(AudioTimeUs(0L), AudioTimeUs(100_000L))
@@ -118,27 +120,46 @@ class X001PresentationClockInstrumentedTest {
             extractor.selectTrack(inputTrack)
 
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            val outputTrack = muxer.addTrack(format)
+            // Keep the delayed source as container track zero because SttAudioPreparer deliberately
+            // selects the first audio track. The anchor track exists only to establish container time
+            // zero so MediaMuxer cannot rebase the delayed track's first sample back to zero.
+            val delayedTrack = muxer.addTrack(format)
+            val anchorTrack = muxer.addTrack(format)
             muxer.start()
             started = true
 
             val buffer = ByteBuffer.allocate(MAX_ENCODED_SAMPLE_BYTES)
-            val info = MediaCodec.BufferInfo()
+            val delayedInfo = MediaCodec.BufferInfo()
+            val anchorInfo = MediaCodec.BufferInfo()
+            var anchorWritten = false
             while (true) {
                 buffer.clear()
                 val size = extractor.readSampleData(buffer, 0)
                 if (size < 0) break
                 val sourcePtsUs = extractor.sampleTime
                 require(sourcePtsUs >= 0L) { "fixture packet has no presentation time" }
-                info.set(
+                val flags = extractor.sampleFlags
+
+                if (!anchorWritten) {
+                    buffer.position(0)
+                    buffer.limit(size)
+                    anchorInfo.set(0, size, 0L, flags)
+                    muxer.writeSampleData(anchorTrack, buffer, anchorInfo)
+                    anchorWritten = true
+                }
+
+                buffer.position(0)
+                buffer.limit(size)
+                delayedInfo.set(
                     0,
                     size,
                     Math.addExact(sourcePtsUs, offsetUs),
-                    extractor.sampleFlags,
+                    flags,
                 )
-                muxer.writeSampleData(outputTrack, buffer, info)
+                muxer.writeSampleData(delayedTrack, buffer, delayedInfo)
                 if (!extractor.advance()) break
             }
+            require(anchorWritten) { "fixture had no encoded packet for the presentation-zero anchor" }
         } finally {
             extractor.release()
             if (started) runCatching { muxer?.stop() }
