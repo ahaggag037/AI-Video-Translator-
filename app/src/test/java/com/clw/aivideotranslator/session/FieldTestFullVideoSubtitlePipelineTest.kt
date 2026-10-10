@@ -10,7 +10,7 @@ class FieldTestFullVideoSubtitlePipelineTest {
     @Test fun acceptsCueBeyondLegacyFirstMinuteWhenInsideVideo() {
         val units = listOf(
             SourceUnit("semantic-1", 65_000L, 67_500L, "A sentence after minute one."),
-            SourceUnit("semantic-2", 67000L, 71_250L, "Another sentence."),
+            SourceUnit("semantic-2", 67_500L, 71_250L, "Another sentence."),
         )
         val entries = listOf(
             TranslationEntry("semantic-1", "جملة بعد الدقيقة الأولى."),
