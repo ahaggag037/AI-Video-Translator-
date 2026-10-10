@@ -54,18 +54,18 @@ internal data class FieldTestRound2UiState(
 /**
  * Isolated round-2 field-test controller.
  *
- * It deliberately does not create a canonical SourceSnapshot. Full-video STT is recovered only from
- * the field-test window journal, while translation reuses the existing durable request/receipt
- * machinery. The active-session pointer is still used so an app/process restart returns to the same
- * source/session and cannot accidentally create a new set of remote STT attempts for the same test.
+ * It deliberately does not create a canonical SourceSnapshot and never reads or writes the
+ * production ActiveSessionRegistry pointer. A private field-test pointer remembers only sessions
+ * whose ids carry the field-r2 prefix. Full-video STT is recovered from its window journal, while
+ * translation reuses the existing per-session durable request/receipt machinery.
  */
 internal class FieldTestRound2ViewModel(
     context: Context,
-    private val activeSessionOwner: ActiveSessionOwner,
     private val store: TranslationSessionStore,
     private val planStore: TranslationRequestPlanStore,
 ) : ViewModel() {
     private val appContext = context.applicationContext
+    private val fieldPreferences = appContext.getSharedPreferences(FIELD_PREFERENCES, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeJob: Job? = null
 
@@ -79,7 +79,7 @@ internal class FieldTestRound2ViewModel(
     fun resumeActiveSource() {
         launchReplacing {
             val resumed = withContext(Dispatchers.IO) {
-                val sessionId = activeSessionOwner.readActiveSessionId() ?: return@withContext null
+                val sessionId = readFieldSessionId() ?: return@withContext null
                 val attachment = store.readActiveSourceAttachment(sessionId) ?: return@withContext null
                 Pair(sessionId, attachment.contentUri)
             }
@@ -88,7 +88,7 @@ internal class FieldTestRound2ViewModel(
                     phase = FieldTestRound2Phase.SOURCE_READY,
                     sessionId = sessionId,
                     sourceUri = contentUri,
-                    message = "تم استرداد مصدر الجولة الثانية. تشغيل STT سيعيد استخدام RECEIVED journal ولن يعيد إرسال نافذة غير مؤكدة.",
+                    message = "تم استرداد مصدر الجولة الثانية من pointer مستقل. تشغيل STT سيعيد استخدام RECEIVED journal ولن يعيد إرسال نافذة غير مؤكدة.",
                 )
             } ?: FieldTestRound2UiState.noSource()
         }
@@ -104,7 +104,6 @@ internal class FieldTestRound2ViewModel(
             )
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
-                    val expectedActiveSessionId = activeSessionOwner.readActiveSessionId()
                     val sessionId = "field-r2-${UUID.randomUUID()}"
                     SourceAttachmentBuilder.capture(
                         context = appContext,
@@ -114,7 +113,9 @@ internal class FieldTestRound2ViewModel(
                         store.createSession(sessionId)
                         store.bindInitialSourceAttachment(sessionId, 0L, captured.attachment)
                     }
-                    activeSessionOwner.activateSession(sessionId, expectedActiveSessionId)
+                    require(fieldPreferences.edit().putString(FIELD_SESSION_KEY, sessionId).commit()) {
+                        "cannot persist field-test session pointer"
+                    }
                     sessionId
                 }
             }
@@ -124,7 +125,7 @@ internal class FieldTestRound2ViewModel(
                         phase = FieldTestRound2Phase.SOURCE_READY,
                         sessionId = sessionId,
                         sourceUri = contentUri,
-                        message = "الفيديو مربوط بجلسة field-test دائمة.",
+                        message = "الفيديو مربوط بجلسة field-test دائمة ومستقلة عن active session الرسمي.",
                     )
                 },
                 onFailure = { error ->
@@ -168,9 +169,7 @@ internal class FieldTestRound2ViewModel(
             )
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
-                    check(activeSessionOwner.readActiveSessionId() == sessionId) {
-                        "active session changed before field-test STT"
-                    }
+                    check(readFieldSessionId() == sessionId) { "field-test session changed before STT" }
                     FieldTestFullVideoSttOperation.transcribe(
                         context = appContext,
                         store = store,
@@ -239,9 +238,7 @@ internal class FieldTestRound2ViewModel(
             )
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
-                    check(activeSessionOwner.readActiveSessionId() == sessionId) {
-                        "active session changed before field-test translation"
-                    }
+                    check(readFieldSessionId() == sessionId) { "field-test session changed before translation" }
                     FieldTestRound2TranslationOperation.translate(
                         store = store,
                         planStore = planStore,
@@ -315,6 +312,15 @@ internal class FieldTestRound2ViewModel(
         )
     }
 
+    private fun readFieldSessionId(): String? {
+        val sessionId = fieldPreferences.getString(FIELD_SESSION_KEY, null) ?: return null
+        if (!sessionId.startsWith(FIELD_SESSION_PREFIX)) return null
+        return runCatching {
+            store.readManifest(sessionId)
+            sessionId
+        }.getOrNull()
+    }
+
     private fun blockerLabel(value: DurableTranslationUnitDisposition?): String = when (value) {
         DurableTranslationUnitDisposition.UNKNOWN_REMOTE_OUTCOME -> "نتيجة بعيدة غير مؤكدة؛ لن يعاد الإرسال تلقائيًا."
         DurableTranslationUnitDisposition.REVIEW_REQUIRED -> "نتيجة تحتاج مراجعة قبل الاعتماد."
@@ -342,7 +348,6 @@ internal class FieldTestRound2ViewModel(
 
     internal class Factory(
         private val context: Context,
-        private val activeSessionOwner: ActiveSessionOwner,
         private val store: TranslationSessionStore,
         private val planStore: TranslationRequestPlanStore,
     ) : ViewModelProvider.Factory {
@@ -351,10 +356,15 @@ internal class FieldTestRound2ViewModel(
             require(modelClass == FieldTestRound2ViewModel::class.java) { "unsupported ViewModel class" }
             return FieldTestRound2ViewModel(
                 context = context,
-                activeSessionOwner = activeSessionOwner,
                 store = store,
                 planStore = planStore,
             ) as T
         }
+    }
+
+    private companion object {
+        const val FIELD_PREFERENCES = "field_test_round2"
+        const val FIELD_SESSION_KEY = "active_field_session_id"
+        const val FIELD_SESSION_PREFIX = "field-r2-"
     }
 }
