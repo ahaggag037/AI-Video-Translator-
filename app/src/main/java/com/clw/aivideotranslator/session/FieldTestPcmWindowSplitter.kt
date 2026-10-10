@@ -34,7 +34,7 @@ internal object FieldTestPcmWindowSplitter {
         val source = RandomAccessFile(fullProfile.file, "r")
         val created = mutableListOf<File>()
         try {
-            val header = ByteArray(WAV_HEADER_BYTES)
+            val header = ByteArray(WAV_HEADER_BYTES.toInt())
             source.readFully(header)
             val wav = inspectCanonicalWav(header)
             require(wav.sampleRateHz == fullProfile.sampleRateHz) { "full STT WAV sample rate mismatch" }
