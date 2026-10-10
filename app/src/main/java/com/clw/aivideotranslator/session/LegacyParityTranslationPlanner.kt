@@ -16,14 +16,20 @@ internal data class LegacyParityTranslationUnit(
 )
 
 /**
- * Adapter for the already-approved P0-F segmentation and nvidia-text-v1 request profile only.
- * This does not enable SourceSegmenter/X002. Timing exists only in the live legacy/semantic bridge;
- * the durable request plan contains text/profile/signatures and no timing.
+ * Round-2 field-test switch point.
+ *
+ * Runtime calls [plan], which intentionally routes only this non-canonical branch through the
+ * isolated semantic planner for device A/B quality testing. [planFrozen] preserves the exact P0-F
+ * comparator and remains covered by the legacy regression tests. The provider profile and durable
+ * request/adoption signature contract are unchanged.
  */
 internal object LegacyParityTranslationPlanner {
     private val legacyProfile = TranslationProfile()
 
-    fun plan(result: NvidiaSttResult): List<LegacyParityTranslationUnit> {
+    fun plan(result: NvidiaSttResult): List<LegacyParityTranslationUnit> =
+        FieldTestSemanticTranslationPlanner.plan(result)
+
+    internal fun planFrozen(result: NvidiaSttResult): List<LegacyParityTranslationUnit> {
         val legacyUnits = SubtitlePipeline.sourceUnits(result.words)
         val semanticWords = LegacySubtitleBridge.sourceWords(result.words)
         var wordCursor = 0
@@ -62,10 +68,6 @@ internal object LegacyParityTranslationPlanner {
         return planned
     }
 
-    /**
-     * P0-F has no acceptance dependencies. A persisted acceptance signature is therefore only valid
-     * for this legacy adapter when it is the canonical digest of the request signature itself.
-     */
     fun isLegacyAcceptanceSignatureValid(plan: TranslationRequestPlan): Boolean =
         plan.profile == legacyProfile &&
             plan.approvedExamples.isEmpty() &&
