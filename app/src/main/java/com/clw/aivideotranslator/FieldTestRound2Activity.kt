@@ -41,6 +41,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.clw.aivideotranslator.session.FieldTestRound2Phase
 import com.clw.aivideotranslator.session.FieldTestRound2UiState
 import com.clw.aivideotranslator.session.FieldTestRound2ViewModel
+import com.clw.aivideotranslator.session.FieldTestSttProgressStage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -217,7 +218,7 @@ private fun FieldTestStatusCard(state: FieldTestRound2UiState) {
                     FieldTestRound2Phase.RESUMING -> "جارٍ فتح/تثبيت جلسة الاختبار…"
                     FieldTestRound2Phase.NO_SOURCE -> "لا يوجد فيديو مربوط حاليًا."
                     FieldTestRound2Phase.SOURCE_READY -> "✓ المصدر جاهز لـfull-video STT."
-                    FieldTestRound2Phase.STT_RUNNING -> "جارٍ معالجة نوافذ STT للفيديو الكامل…"
+                    FieldTestRound2Phase.STT_RUNNING -> "جارٍ معالجة STT — التفاصيل الحية بالأسفل."
                     FieldTestRound2Phase.STT_READY -> "✓ full-video STT جاهز للترجمة الدلالية."
                     FieldTestRound2Phase.TRANSLATING -> "جارٍ ترجمة semantic units…"
                     FieldTestRound2Phase.TRANSLATED -> "✓ الترجمة الكاملة جاهزة للمعاينة والتصدير."
@@ -227,9 +228,44 @@ private fun FieldTestStatusCard(state: FieldTestRound2UiState) {
                     FieldTestRound2Phase.FAILED -> "تعذر إكمال الخطوة الحالية."
                 }
             )
+
+            state.sttProgress?.let { progress ->
+                Text("تقدم STT", fontWeight = FontWeight.SemiBold)
+                progress.totalWindows?.let { total ->
+                    progress.currentWindow?.let { current ->
+                        FieldTestValue("النافذة", "$current / $total")
+                    }
+                    FieldTestValue("المكتمل", "${progress.completedWindows} / $total")
+                }
+                FieldTestValue("المرحلة", sttProgressStageLabel(progress.stage))
+                if (progress.windowStartUs != null && progress.windowEndUs != null) {
+                    FieldTestValue(
+                        "المقطع",
+                        "${formatFieldTestTime(progress.windowStartUs)} → ${formatFieldTestTime(progress.windowEndUs)}",
+                    )
+                }
+            }
             state.message?.let { Text(it) }
         }
     }
+}
+
+private fun sttProgressStageLabel(stage: FieldTestSttProgressStage): String = when (stage) {
+    FieldTestSttProgressStage.PREPARING_AUDIO -> "تجهيز وفك الصوت الكامل"
+    FieldTestSttProgressStage.PREFLIGHT -> "فحص journal قبل الإرسال"
+    FieldTestSttProgressStage.PREPARING_WINDOW -> "تجهيز النافذة والبصمة"
+    FieldTestSttProgressStage.REUSING_RECEIVED -> "إعادة استخدام نتيجة محفوظة"
+    FieldTestSttProgressStage.SENDING -> "تثبيت SENT والإرسال"
+    FieldTestSttProgressStage.WAITING_RESPONSE -> "انتظار رد NVIDIA"
+    FieldTestSttProgressStage.RECEIVED -> "تم استلام وحفظ الرد"
+    FieldTestSttProgressStage.ASSEMBLING -> "تجميع timeline النهائي"
+}
+
+private fun formatFieldTestTime(timeUs: Long): String {
+    val totalSeconds = timeUs / 1_000_000L
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%d:%02d".format(java.util.Locale.ROOT, minutes, seconds)
 }
 
 @Composable
