@@ -6,6 +6,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.SystemClock
 import com.clw.aivideotranslator.semantic.PresentationIntervalUs
 import com.clw.aivideotranslator.semantic.PresentationTimeUs
 import java.io.File
@@ -41,7 +42,7 @@ object SourceAttachmentAssembler {
         return SourceAttachment(
             sessionId = sessionId,
             contentUri = inspection.observedContentUri,
-            persistedReadGrantAtCapture = inspection.persistedReadGrantNow,
+            persistedReadGrantAtCapture = inspection.persistedGrantNow,
             fingerprint = fingerprint,
             durationUs = durationUs,
             selectedRange = range,
@@ -53,6 +54,22 @@ object SourceAttachmentAssembler {
 /** Distinct, machine-readable capture failure; never silently downgraded. */
 internal class SourceCaptureException(val status: SourceReadStatus, cause: Throwable? = null) :
     IllegalStateException("source is not readable at capture: $status", cause)
+
+/**
+ * Live telemetry from the exact copy+hash pass. Total source bytes are intentionally absent because
+ * discovering them with another provider query/open would weaken the one-open identity boundary.
+ */
+internal data class SourceCaptureProgress(
+    val copiedBytes: Long,
+    val elapsedMs: Long,
+    val bytesPerSecond: Double,
+) {
+    init {
+        require(copiedBytes >= 0L)
+        require(elapsedMs >= 0L)
+        require(bytesPerSecond >= 0.0 && bytesPerSecond.isFinite())
+    }
+}
 
 /**
  * Blocking Android capture boundary for a freshly selected source. Call from an I/O dispatcher.
@@ -79,20 +96,28 @@ internal class SourceCaptureException(val status: SourceReadStatus, cause: Throw
  */
 object SourceAttachmentBuilder {
     private const val BUFFER_BYTES = 64 * 1024
+    private const val PROGRESS_MIN_INTERVAL_MS = 250L
 
     fun build(
         context: Context,
         sessionId: String,
         contentUri: String,
         requestedRange: PresentationIntervalUs? = null,
-    ): Result<SourceAttachment> = capture(context, sessionId, contentUri, requestedRange)
-        .map { captured -> captured.use { it.attachment } }
+        onProgress: (SourceCaptureProgress) -> Unit = {},
+    ): Result<SourceAttachment> = capture(
+        context = context,
+        sessionId = sessionId,
+        contentUri = contentUri,
+        requestedRange = requestedRange,
+        onProgress = onProgress,
+    ).map { captured -> captured.use { it.attachment } }
 
     internal fun capture(
         context: Context,
         sessionId: String,
         contentUri: String,
         requestedRange: PresentationIntervalUs? = null,
+        onProgress: (SourceCaptureProgress) -> Unit = {},
     ): Result<CapturedSource> = runCatching {
         val resolver = context.contentResolver
         val uri = Uri.parse(contentUri)
@@ -109,7 +134,7 @@ object SourceAttachmentBuilder {
         val copy = File.createTempFile("source-capture-", ".bin", captureDir)
         var ownershipTransferred = false
         try {
-            val fingerprint = copyAndHashOnce(resolver, uri, copy)
+            val fingerprint = copyAndHashOnce(resolver, uri, copy, onProgress)
             val durationMs = readDurationMs(copy)
             val track = readFirstAudioTrack(copy)
             val attachment = SourceAttachmentAssembler.assemble(
@@ -131,7 +156,12 @@ object SourceAttachmentBuilder {
     }
 
     /** The hashed bytes ARE the copied bytes: one provider open, one pass, one identity. */
-    private fun copyAndHashOnce(resolver: ContentResolver, uri: Uri, target: File): SourceFingerprint {
+    private fun copyAndHashOnce(
+        resolver: ContentResolver,
+        uri: Uri,
+        target: File,
+        onProgress: (SourceCaptureProgress) -> Unit,
+    ): SourceFingerprint {
         val input = try {
             resolver.openInputStream(uri)
         } catch (error: SecurityException) {
@@ -145,6 +175,28 @@ object SourceAttachmentBuilder {
 
         val digest = MessageDigest.getInstance("SHA-256")
         var sizeBytes = 0L
+        val startedAt = SystemClock.elapsedRealtime()
+        var lastProgressAt = startedAt
+
+        fun publishProgress(force: Boolean = false) {
+            val now = SystemClock.elapsedRealtime()
+            if (!force && now - lastProgressAt < PROGRESS_MIN_INTERVAL_MS) return
+            lastProgressAt = now
+            val elapsedMs = now - startedAt
+            val bytesPerSecond = if (elapsedMs > 0L) {
+                sizeBytes.toDouble() * 1_000.0 / elapsedMs.toDouble()
+            } else {
+                0.0
+            }
+            onProgress(
+                SourceCaptureProgress(
+                    copiedBytes = sizeBytes,
+                    elapsedMs = elapsedMs,
+                    bytesPerSecond = bytesPerSecond,
+                ),
+            )
+        }
+
         try {
             input.use { stream ->
                 target.outputStream().use { out ->
@@ -156,7 +208,9 @@ object SourceAttachmentBuilder {
                         digest.update(buffer, 0, read)
                         out.write(buffer, 0, read)
                         sizeBytes = Math.addExact(sizeBytes, read.toLong())
+                        publishProgress()
                     }
+                    out.flush()
                 }
             }
         } catch (error: IOException) {
@@ -165,6 +219,7 @@ object SourceAttachmentBuilder {
             throw SourceCaptureException(SourceReadStatus.IO_FAILURE, error)
         }
         if (sizeBytes == 0L) throw SourceCaptureException(SourceReadStatus.EMPTY_SOURCE)
+        publishProgress(force = true)
         return SourceFingerprint(hexLower(digest.digest()), sizeBytes)
     }
 
@@ -218,4 +273,3 @@ object SourceAttachmentBuilder {
         }
     }
 }
-
