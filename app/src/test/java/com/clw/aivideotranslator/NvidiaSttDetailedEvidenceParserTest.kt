@@ -1,11 +1,12 @@
 package com.clw.aivideotranslator
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NvidiaSttDetailedEvidenceParserTest {
-    @Test fun detailedParsePreservesExactLegacyAcceptedResultAndRawEvidence() {
+    @Test fun detailedParsePreservesTextAndRawOffsetsWithoutInterpretingTiming() {
         val body = """
             {
               "text": "Hello world.",
@@ -16,18 +17,20 @@ class NvidiaSttDetailedEvidenceParserTest {
             }
         """.trimIndent()
 
-        val legacy = NvidiaSttClient.parseResponse(body, 206)
         val detailed = NvidiaSttDetailedEvidenceParser.parse(body, 206)
 
-        assertEquals(legacy, detailed.result)
+        assertEquals("Hello world.", detailed.result.transcript)
+        assertEquals(listOf("Hello", "world."), detailed.result.words.map { it.text })
         assertEquals(206, detailed.result.httpStatus)
+        assertTrue(detailed.result.words.all { it.startMs == null && it.endMs == null })
         assertEquals(body, detailed.timingEvidence.rawResponseUtf8)
         assertEquals(NvidiaSttTimingEvidenceInspector.inspect(body), detailed.timingEvidence)
-        assertEquals(80L, detailed.result.words.first().startMs)
-        assertEquals(800L, detailed.result.words.last().endMs)
+        assertEquals("0.08", detailed.timingEvidence.sources.single().words.first().startFields.getValue("start").rawText)
+        assertEquals("0.80", detailed.timingEvidence.sources.single().words.last().endFields.getValue("end").rawText)
+        assertEquals(NvidiaSttParserContract.ID, detailed.parserVersion)
     }
 
-    @Test fun evidenceDoesNotChangeLegacyMultiSchemaParserSemantics() {
+    @Test fun evidenceDoesNotMergeMultipleSchemasIntoAcceptedTiming() {
         val body = """
             {
               "text": "accepted",
@@ -41,11 +44,12 @@ class NvidiaSttDetailedEvidenceParserTest {
         """.trimIndent()
 
         val detailed = NvidiaSttDetailedEvidenceParser.parse(body)
-        val legacy = NvidiaSttClient.parseResponse(body)
 
-        assertEquals(legacy, detailed.result)
         assertEquals(listOf("info", "root"), detailed.result.words.map { it.text })
+        assertTrue(detailed.result.words.all { it.startMs == null && it.endMs == null })
         assertTrue(detailed.timingEvidence.hasMultipleWordSchemas)
         assertEquals(2, detailed.timingEvidence.sources.size)
+        assertNull(detailed.result.firstWordStartMs)
+        assertNull(detailed.result.lastWordEndMs)
     }
 }
