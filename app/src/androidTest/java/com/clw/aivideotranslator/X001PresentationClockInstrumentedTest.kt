@@ -102,7 +102,21 @@ class X001PresentationClockInstrumentedTest {
         val encoded = testContext.assets.open("source_capture/x001_delayed_tone.ts.b64")
             .bufferedReader()
             .use { it.readText() }
-        val bytes = Base64.decode(encoded, Base64.DEFAULT)
+        val compact = buildString(encoded.length) {
+            encoded.forEach { ch ->
+                when {
+                    ch in 'A'..'Z' ||
+                        ch in 'a'..'z' ||
+                        ch in '0'..'9' ||
+                        ch == '+' || ch == '/' || ch == '=' -> append(ch)
+                    ch == '\r' || ch == '\n' || ch == ' ' || ch == '\t' -> Unit
+                    else -> error(
+                        "unexpected base64 fixture character U+${ch.code.toString(16).uppercase()}"
+                    )
+                }
+            }
+        }
+        val bytes = Base64.decode(compact, Base64.NO_WRAP)
         assertEquals(EXPECTED_TS_SHA256, sha256(bytes))
         return File(root, "x001_delayed_tone.ts").apply { writeBytes(bytes) }
     }
