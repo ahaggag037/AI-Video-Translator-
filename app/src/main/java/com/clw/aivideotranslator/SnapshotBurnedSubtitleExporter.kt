@@ -159,6 +159,12 @@ internal object SnapshotBurnedSubtitleExporter {
                     }
                     validationExecutor.shutdown()
                     mainHandler.post {
+                        // Cancellation during validation is terminal. Never resurrect a cancelled
+                        // export as COMPLETE/FAILED when the validator finishes or ignores interrupt.
+                        if (phase.get() == SnapshotBurnedExportPhase.CANCELLED) {
+                            outputFile.delete()
+                            return@post
+                        }
                         validated.onSuccess { result ->
                             phase.set(SnapshotBurnedExportPhase.COMPLETE)
                             onPhaseChanged(SnapshotBurnedExportPhase.COMPLETE)
