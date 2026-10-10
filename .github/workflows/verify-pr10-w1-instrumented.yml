@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 5dd7dc899bac4f5b5e9b111144844785b2ad9ba1
+          ref: 25e6fa2b435bdfadd25f444d3c98b5a2f7239ea9
 
       - uses: actions/setup-java@v5
         with:
@@ -59,7 +59,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pr10-x001-video-anchor-api${{ matrix.api-level }}
+          name: pr10-x001-mpegts-api${{ matrix.api-level }}
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
