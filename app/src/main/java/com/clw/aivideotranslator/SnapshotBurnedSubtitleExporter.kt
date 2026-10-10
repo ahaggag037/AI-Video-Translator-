@@ -61,7 +61,6 @@ internal object SnapshotBurnedSubtitleExporter {
         snapshot: LivePresentationRasterSnapshot,
         sampleStartMs: Long,
         sampleEndMs: Long,
-        sourceHasAudio: Boolean,
         onCompleted: (BurnedVideoResult) -> Unit,
         onError: (String) -> Unit,
     ): SnapshotBurnedExportSession {
@@ -124,7 +123,7 @@ internal object SnapshotBurnedSubtitleExporter {
                         validate(
                             file = outputFile,
                             expectedDurationUs = sampleEndUs - sampleStartUs,
-                            sourceHasAudio = sourceHasAudio,
+                            sourceHasAudio = snapshot.sourceHasAudio,
                         )
                     }
                     validationExecutor.shutdown()
