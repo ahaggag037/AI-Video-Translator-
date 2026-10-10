@@ -3,7 +3,9 @@ name: X006 Performance Qualification
 on:
   workflow_dispatch:
   push:
-    branches: [ 'parallel/release-x006-performance' ]
+    branches:
+      - 'parallel/release-x006-performance'
+      - 'build/release-performance-pipeline-v1'
 
 jobs:
   build-and-unit:
