@@ -1,5 +1,7 @@
 package com.clw.aivideotranslator.semantic
 
+import android.os.Build
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -9,10 +11,9 @@ import kotlin.random.Random
 /**
  * X006 / N28 structural performance falsifier.
  *
- * This deliberately avoids wall-clock thresholds, which are noisy across emulator/phone hardware.
- * Instead it exercises the full N28 timeline size on Android and verifies the lookup contract that
- * matters for scalability: 5,000 cues over 42 minutes, 1,000 fixed-seed random seeks, exact results,
- * and only one interval resolution after each binary search rather than a linear cue walk.
+ * Wall-clock time is reported as device evidence, but correctness is not gated on a synthetic
+ * cross-device speed number. The hard scalability assertion is architectural: construction may
+ * inspect each cue once and each seek may resolve only the single binary-search candidate interval.
  */
 @RunWith(AndroidJUnit4::class)
 class SubtitlePerformanceInstrumentedTest {
@@ -48,6 +49,7 @@ class SubtitlePerformanceInstrumentedTest {
         assertEquals(cueCount, index.size)
         assertEquals("index construction should inspect every cue exactly once", cueCount, intervalResolutions)
 
+        val startedNs = SystemClock.elapsedRealtimeNanos()
         val random = Random(0x58_30_30_36)
         repeat(seekCount) {
             val timeUs = random.nextLong(0L, durationUs)
@@ -58,11 +60,19 @@ class SubtitlePerformanceInstrumentedTest {
             val actual = index.activeAt(PresentationTimeUs(timeUs))
             assertEquals(expected?.id, actual?.id)
         }
+        val elapsedNs = SystemClock.elapsedRealtimeNanos() - startedNs
 
         assertEquals(
             "each seek may resolve only the binary-search candidate interval; a linear scan would grow with cue count",
             cueCount + seekCount,
             intervalResolutions,
+        )
+        println(
+            "X006_METRIC kind=cue_index_random " +
+                "manufacturer=${metricToken(Build.MANUFACTURER)} model=${metricToken(Build.MODEL)} " +
+                "api=${Build.VERSION.SDK_INT} cueCount=$cueCount timelineDurationUs=$durationUs " +
+                "seekCount=$seekCount intervalResolutions=$intervalResolutions " +
+                "elapsedMs=${elapsedNs / 1_000_000.0}",
         )
     }
 
@@ -86,6 +96,59 @@ class SubtitlePerformanceInstrumentedTest {
             val cue = cues[cueId]
             assertEquals(cueId, index.activeAt(cue.interval.start)?.id)
             assertEquals(null, index.activeAt(cue.interval.end)?.id)
+            val gapProbe = PresentationTimeUs(cue.interval.end.value + slotUs / 8L)
+            if (gapProbe.value < (cueId + 1L) * slotUs) {
+                assertEquals(null, index.activeAt(gapProbe)?.id)
+            }
         }
     }
+
+    @Test
+    fun n28AdjacentAndRepeatedSeeksKeepFirstLastAndBoundariesExact() {
+        val cueCount = 5_000
+        val durationUs = 42L * 60L * 1_000_000L
+        val slotUs = durationUs / cueCount
+        val cues = (0 until cueCount).map { index ->
+            val start = index * slotUs
+            Cue(
+                index,
+                PresentationIntervalUs(
+                    PresentationTimeUs(start),
+                    PresentationTimeUs(start + slotUs),
+                ),
+            )
+        }
+
+        var intervalResolutions = 0
+        val index = CueIndex(cues) { cue ->
+            intervalResolutions += 1
+            cue.interval
+        }
+        val probes = mutableListOf<Pair<Long, Int?>>()
+        probes += 0L to 0
+        probes += (slotUs - 1L) to 0
+        probes += slotUs to 1
+        probes += ((cueCount - 1L) * slotUs) to (cueCount - 1)
+        probes += (cueCount.toLong() * slotUs) to null
+        repeat(1_000) {
+            probes += ((cueCount / 2L) * slotUs + slotUs / 2L) to (cueCount / 2)
+        }
+
+        probes.forEach { (timeUs, expectedId) ->
+            assertEquals(expectedId, index.activeAt(PresentationTimeUs(timeUs))?.id)
+        }
+        assertEquals(
+            "repeated/adjacent seeks must still resolve one candidate interval per lookup",
+            cueCount + probes.size,
+            intervalResolutions,
+        )
+        println(
+            "X006_METRIC kind=cue_index_boundaries " +
+                "manufacturer=${metricToken(Build.MANUFACTURER)} model=${metricToken(Build.MODEL)} " +
+                "api=${Build.VERSION.SDK_INT} cueCount=$cueCount lookupCount=${probes.size} " +
+                "intervalResolutions=$intervalResolutions",
+        )
+    }
+
+    private fun metricToken(value: String): String = value.trim().replace(Regex("\\s+"), "_")
 }
