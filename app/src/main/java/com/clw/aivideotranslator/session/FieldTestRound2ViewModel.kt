@@ -1,0 +1,360 @@
+package com.clw.aivideotranslator.session
+
+import android.content.Context
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import com.clw.aivideotranslator.NvidiaSttResult
+import com.clw.aivideotranslator.SourceUnit
+import com.clw.aivideotranslator.TranslationEntry
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+internal enum class FieldTestRound2Phase {
+    RESUMING,
+    NO_SOURCE,
+    SOURCE_READY,
+    STT_RUNNING,
+    STT_READY,
+    TRANSLATING,
+    TRANSLATED,
+    STT_UNKNOWN_REMOTE_OUTCOME,
+    TRANSLATION_BLOCKED,
+    FAILED,
+}
+
+internal data class FieldTestRound2UiState(
+    val phase: FieldTestRound2Phase,
+    val sessionId: String? = null,
+    val sourceUri: String? = null,
+    val sttResult: NvidiaSttResult? = null,
+    val units: List<SourceUnit> = emptyList(),
+    val entries: List<TranslationEntry> = emptyList(),
+    val message: String? = null,
+) {
+    val busy: Boolean
+        get() = phase == FieldTestRound2Phase.RESUMING ||
+            phase == FieldTestRound2Phase.STT_RUNNING ||
+            phase == FieldTestRound2Phase.TRANSLATING
+
+    companion object {
+        fun resuming() = FieldTestRound2UiState(FieldTestRound2Phase.RESUMING)
+        fun noSource() = FieldTestRound2UiState(FieldTestRound2Phase.NO_SOURCE)
+    }
+}
+
+/**
+ * Isolated round-2 field-test controller.
+ *
+ * It deliberately does not create a canonical SourceSnapshot. Full-video STT is recovered only from
+ * the field-test window journal, while translation reuses the existing durable request/receipt
+ * machinery. The active-session pointer is still used so an app/process restart returns to the same
+ * source/session and cannot accidentally create a new set of remote STT attempts for the same test.
+ */
+internal class FieldTestRound2ViewModel(
+    context: Context,
+    private val activeSessionOwner: ActiveSessionOwner,
+    private val store: TranslationSessionStore,
+    private val planStore: TranslationRequestPlanStore,
+) : ViewModel() {
+    private val appContext = context.applicationContext
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var activeJob: Job? = null
+
+    private val mutableState = MutableStateFlow(FieldTestRound2UiState.resuming())
+    val state = mutableState.asStateFlow()
+
+    init {
+        resumeActiveSource()
+    }
+
+    fun resumeActiveSource() {
+        launchReplacing {
+            val resumed = withContext(Dispatchers.IO) {
+                val sessionId = activeSessionOwner.readActiveSessionId() ?: return@withContext null
+                val attachment = store.readActiveSourceAttachment(sessionId) ?: return@withContext null
+                Pair(sessionId, attachment.contentUri)
+            }
+            mutableState.value = resumed?.let { (sessionId, contentUri) ->
+                FieldTestRound2UiState(
+                    phase = FieldTestRound2Phase.SOURCE_READY,
+                    sessionId = sessionId,
+                    sourceUri = contentUri,
+                    message = "تم استرداد مصدر الجولة الثانية. تشغيل STT سيعيد استخدام RECEIVED journal ولن يعيد إرسال نافذة غير مؤكدة.",
+                )
+            } ?: FieldTestRound2UiState.noSource()
+        }
+    }
+
+    fun selectSource(contentUri: String) {
+        require(contentUri.isNotBlank()) { "source URI is blank" }
+        launchReplacing {
+            mutableState.value = FieldTestRound2UiState(
+                phase = FieldTestRound2Phase.RESUMING,
+                sourceUri = contentUri,
+                message = "جارٍ تثبيت هوية الفيديو للجولة الثانية…",
+            )
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    val expectedActiveSessionId = activeSessionOwner.readActiveSessionId()
+                    val sessionId = "field-r2-${UUID.randomUUID()}"
+                    SourceAttachmentBuilder.capture(
+                        context = appContext,
+                        sessionId = sessionId,
+                        contentUri = contentUri,
+                    ).getOrThrow().use { captured ->
+                        store.createSession(sessionId)
+                        store.bindInitialSourceAttachment(sessionId, 0L, captured.attachment)
+                    }
+                    activeSessionOwner.activateSession(sessionId, expectedActiveSessionId)
+                    sessionId
+                }
+            }
+            outcome.fold(
+                onSuccess = { sessionId ->
+                    mutableState.value = FieldTestRound2UiState(
+                        phase = FieldTestRound2Phase.SOURCE_READY,
+                        sessionId = sessionId,
+                        sourceUri = contentUri,
+                        message = "الفيديو مربوط بجلسة field-test دائمة.",
+                    )
+                },
+                onFailure = { error ->
+                    if (error is CancellationException) return@fold
+                    mutableState.value = FieldTestRound2UiState(
+                        phase = FieldTestRound2Phase.FAILED,
+                        sourceUri = contentUri,
+                        message = error.message ?: "تعذر تثبيت مصدر الجولة الثانية.",
+                    )
+                },
+            )
+        }
+    }
+
+    fun runFullVideoStt(apiKey: String) {
+        val current = mutableState.value
+        val sessionId = current.sessionId
+        val sourceUri = current.sourceUri
+        if (sessionId == null || sourceUri == null || current.phase == FieldTestRound2Phase.RESUMING) {
+            mutableState.value = current.copy(
+                phase = FieldTestRound2Phase.FAILED,
+                message = "اربط فيديو صالحًا قبل تشغيل full-video STT.",
+            )
+            return
+        }
+        if (apiKey.isBlank()) {
+            mutableState.value = current.copy(
+                phase = FieldTestRound2Phase.FAILED,
+                message = "NVIDIA API Key فارغ.",
+            )
+            return
+        }
+
+        launchReplacing {
+            mutableState.value = current.copy(
+                phase = FieldTestRound2Phase.STT_RUNNING,
+                sttResult = null,
+                units = emptyList(),
+                entries = emptyList(),
+                message = "جارٍ تشغيل STT على الفيديو كاملًا بنافذة/نوافذ journal-safe…",
+            )
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    check(activeSessionOwner.readActiveSessionId() == sessionId) {
+                        "active session changed before field-test STT"
+                    }
+                    FieldTestFullVideoSttOperation.transcribe(
+                        context = appContext,
+                        store = store,
+                        sessionId = sessionId,
+                        apiKey = apiKey,
+                    ).getOrThrow()
+                }
+            }
+            outcome.fold(
+                onSuccess = { result ->
+                    mutableState.value = FieldTestRound2UiState(
+                        phase = FieldTestRound2Phase.STT_READY,
+                        sessionId = sessionId,
+                        sourceUri = sourceUri,
+                        sttResult = result,
+                        message = "اكتمل full-video STT وتجميع التوقيت على timeline الفيديو الأصلي.",
+                    )
+                },
+                onFailure = { error ->
+                    if (error is CancellationException) return@fold
+                    mutableState.value = FieldTestRound2UiState(
+                        phase = if (error is UnknownSttRemoteOutcomeException) {
+                            FieldTestRound2Phase.STT_UNKNOWN_REMOTE_OUTCOME
+                        } else {
+                            FieldTestRound2Phase.FAILED
+                        },
+                        sessionId = sessionId,
+                        sourceUri = sourceUri,
+                        message = if (error is UnknownSttRemoteOutcomeException) {
+                            "توجد نافذة STT في حالة SENT بنتيجة بعيدة غير مؤكدة؛ تم إيقاف الإرسال التلقائي لمنع تكرار الطلب."
+                        } else {
+                            error.message ?: "تعذر إكمال full-video STT."
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    fun runSemanticTranslation(apiKey: String) {
+        val current = mutableState.value
+        val sessionId = current.sessionId
+        val sourceUri = current.sourceUri
+        val liveStt = current.sttResult
+        if (sessionId == null || sourceUri == null || liveStt == null) {
+            mutableState.value = current.copy(
+                phase = FieldTestRound2Phase.FAILED,
+                message = "يلزم نجاح full-video STT في هذه الجلسة قبل الترجمة.",
+            )
+            return
+        }
+        if (apiKey.isBlank()) {
+            mutableState.value = current.copy(
+                phase = FieldTestRound2Phase.FAILED,
+                message = "NVIDIA API Key فارغ.",
+            )
+            return
+        }
+
+        launchReplacing {
+            mutableState.value = current.copy(
+                phase = FieldTestRound2Phase.TRANSLATING,
+                units = emptyList(),
+                entries = emptyList(),
+                message = "جارٍ ترجمة semantic units على امتداد الفيديو كاملًا…",
+            )
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    check(activeSessionOwner.readActiveSessionId() == sessionId) {
+                        "active session changed before field-test translation"
+                    }
+                    FieldTestRound2TranslationOperation.translate(
+                        store = store,
+                        planStore = planStore,
+                        sessionId = sessionId,
+                        apiKey = apiKey,
+                        liveStt = liveStt,
+                    ).getOrThrow()
+                }
+            }
+            outcome.fold(
+                onSuccess = { execution -> publishTranslation(sessionId, sourceUri, liveStt, execution) },
+                onFailure = { error ->
+                    if (error is CancellationException) return@fold
+                    mutableState.value = FieldTestRound2UiState(
+                        phase = FieldTestRound2Phase.FAILED,
+                        sessionId = sessionId,
+                        sourceUri = sourceUri,
+                        sttResult = liveStt,
+                        message = error.message ?: "تعذر إكمال ترجمة الجولة الثانية.",
+                    )
+                },
+            )
+        }
+    }
+
+    private fun publishTranslation(
+        sessionId: String,
+        sourceUri: String,
+        liveStt: NvidiaSttResult,
+        execution: DurableTranslationExecution,
+    ) {
+        val acceptedEntries = execution.batch.units
+            .takeWhile {
+                it.disposition == DurableTranslationUnitDisposition.REUSED_ENTRY ||
+                    it.disposition == DurableTranslationUnitDisposition.ADOPTED
+            }
+            .map { result ->
+                TranslationEntry(
+                    sourceUnitId = result.unitId,
+                    translatedText = requireNotNull(result.effectiveText) {
+                        "accepted translation unit missing effective text"
+                    },
+                )
+            }
+
+        if (execution.batch.completed) {
+            val units = execution.units.map { it.legacyUnit }
+            require(units.map { it.id } == acceptedEntries.map { it.sourceUnitId }) {
+                "completed field-test translation changed semantic unit identity"
+            }
+            mutableState.value = FieldTestRound2UiState(
+                phase = FieldTestRound2Phase.TRANSLATED,
+                sessionId = sessionId,
+                sourceUri = sourceUri,
+                sttResult = liveStt,
+                units = units,
+                entries = acceptedEntries,
+                message = "اكتملت الترجمة الدلالية للفيديو كاملًا؛ المعاينة وSRT وMP4 جاهزة للبناء.",
+            )
+            return
+        }
+
+        val blocker = execution.batch.units.lastOrNull()?.disposition
+        mutableState.value = FieldTestRound2UiState(
+            phase = FieldTestRound2Phase.TRANSLATION_BLOCKED,
+            sessionId = sessionId,
+            sourceUri = sourceUri,
+            sttResult = liveStt,
+            entries = acceptedEntries,
+            message = "توقفت الترجمة بأمان: ${blockerLabel(blocker)}",
+        )
+    }
+
+    private fun blockerLabel(value: DurableTranslationUnitDisposition?): String = when (value) {
+        DurableTranslationUnitDisposition.UNKNOWN_REMOTE_OUTCOME -> "نتيجة بعيدة غير مؤكدة؛ لن يعاد الإرسال تلقائيًا."
+        DurableTranslationUnitDisposition.REVIEW_REQUIRED -> "نتيجة تحتاج مراجعة قبل الاعتماد."
+        DurableTranslationUnitDisposition.AMBIGUOUS_RECEIPTS -> "سجلات محاولات متعارضة لنفس الوحدة."
+        DurableTranslationUnitDisposition.STALE_STATE -> "حالة الجلسة تغيّرت أثناء التنفيذ."
+        DurableTranslationUnitDisposition.REJECTED -> "رفض التحقق نتيجة إحدى الوحدات."
+        DurableTranslationUnitDisposition.TERMINAL -> "أعاد المزود نتيجة نهائية غير قابلة للاعتماد."
+        DurableTranslationUnitDisposition.PENDING -> "إحدى النتائج ما زالت معلقة."
+        DurableTranslationUnitDisposition.REUSED_ENTRY,
+        DurableTranslationUnitDisposition.ADOPTED,
+        null,
+        -> "لم تكتمل كل الوحدات."
+    }
+
+    private fun launchReplacing(block: suspend () -> Unit) {
+        activeJob?.cancel()
+        activeJob = scope.launch { block() }
+    }
+
+    override fun onCleared() {
+        activeJob?.cancel()
+        scope.cancel()
+        super.onCleared()
+    }
+
+    internal class Factory(
+        private val context: Context,
+        private val activeSessionOwner: ActiveSessionOwner,
+        private val store: TranslationSessionStore,
+        private val planStore: TranslationRequestPlanStore,
+    ) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            require(modelClass == FieldTestRound2ViewModel::class.java) { "unsupported ViewModel class" }
+            return FieldTestRound2ViewModel(
+                context = context,
+                activeSessionOwner = activeSessionOwner,
+                store = store,
+                planStore = planStore,
+            ) as T
+        }
+    }
+}
