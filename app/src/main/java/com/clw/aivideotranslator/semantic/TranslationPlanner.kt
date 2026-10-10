@@ -45,7 +45,7 @@ object TranslationPlanner {
             "nvidia-text-v1 does not send few-shot examples"
         }
         val examples = approvedExamples.sortedBy { it.id }
-        val requestSignature = canonicalSha256(requestFields(profile, unit.sourceText, examples))
+        val requestSignature = requestSignatureFor(profile, unit.sourceText, examples)
         val acceptanceSignature = canonicalSha256(
             listOf(requestSignature) + applicableAcceptanceDependencies.sorted(),
         )
@@ -62,10 +62,17 @@ object TranslationPlanner {
     fun isRequestPlanSelfConsistent(plan: TranslationRequestPlan): Boolean {
         if (plan.unitId.isBlank() || plan.exactSourceText.length > 1_000) return false
         if (plan.approvedExamples.isNotEmpty() && plan.profile.protocolVersion == "1") return false
-        val examples = plan.approvedExamples.sortedBy { it.id }
-        val expected = canonicalSha256(requestFields(plan.profile, plan.exactSourceText, examples))
+        val expected = requestSignatureFor(plan.profile, plan.exactSourceText, plan.approvedExamples)
         return expected == plan.requestSignature
     }
+
+    internal fun requestSignatureFor(
+        profile: TranslationProfile,
+        exactUserContent: String,
+        approvedExamples: List<ApprovedExample> = emptyList(),
+    ): String = canonicalSha256(
+        requestFields(profile, exactUserContent, approvedExamples.sortedBy { it.id }),
+    )
 
     private fun requestFields(
         profile: TranslationProfile,
