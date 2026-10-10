@@ -38,6 +38,18 @@ class SubtitleRasterizerInstrumentedTest {
     }
 
     @Test
+    fun explicitTwoLineCueRasterizesWithoutDuplicatingItsLineBreak() {
+        val geometry = FrameGeometry(854, 480)
+        val loaded = font()
+        val descriptor = requireFits("السطر العربي الأول\nالسطر العربي الثاني", geometry, loaded)
+        assertEquals(2, descriptor.lineRanges.size)
+
+        val result = SubtitleRasterizer().rasterize(descriptor, geometry, loaded)
+        assertTrue("explicit multiline descriptor must remain rasterizable", result is SubtitleRasterResult.Ready)
+        (result as SubtitleRasterResult.Ready).raster.bitmap.recycle()
+    }
+
+    @Test
     fun descriptorWithWrongPinnedFontIdentityFailsClosed() {
         val geometry = FrameGeometry(854, 480)
         val loaded = font()

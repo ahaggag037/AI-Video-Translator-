@@ -62,8 +62,8 @@ internal fun RasterVideoSubtitlePreview(
     var displayedRequestId by remember(sourceUri, snapshot) { mutableStateOf<String?>(null) }
     var activeSemanticText by remember(sourceUri, snapshot) { mutableStateOf<String?>(null) }
 
-    val timelineEndMs = snapshot.timeline.cues.lastOrNull()?.endUs?.div(1_000L) ?: sampleEndMs
-    val previewEndMs = minOf(sampleEndMs, timelineEndMs.coerceAtLeast(sampleStartMs))
+    val timelineEndMs = snapshot.timeline.cues.lastOrNull()?.endUs?.div(1_000L)
+    val previewEndMs = PreviewPlaybackWindow.endMs(sampleStartMs, sampleEndMs, timelineEndMs)
 
     displayLease?.let { lease ->
         DisposableEffect(lease) {

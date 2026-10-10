@@ -31,18 +31,29 @@ object TextPolicy {
         val rawProtected = protectedPattern.findAll(raw)
             .map { TextRange(it.range.first, it.range.last + 1) }
             .toList()
-        val canonicalProtected = mutableListOf<TextRange>()
-        val canonical = buildString(raw.length) {
+        val untrimmedProtected = mutableListOf<TextRange>()
+        val untrimmedCanonical = buildString(raw.length) {
             var cursor = 0
             rawProtected.forEach { range ->
                 if (cursor < range.start) append(normalizeOrdinary(raw.substring(cursor, range.start)))
                 val canonicalStart = length
                 append(raw.substring(range.start, range.endExclusive))
-                canonicalProtected += TextRange(canonicalStart, length)
+                untrimmedProtected += TextRange(canonicalStart, length)
                 cursor = range.endExclusive
             }
             if (cursor < raw.length) append(normalizeOrdinary(raw.substring(cursor)))
-        }.trim()
+        }
+        val trimStart = untrimmedCanonical.indexOfFirst { !it.isWhitespace() }
+            .let { if (it < 0) untrimmedCanonical.length else it }
+        val trimEndExclusive = untrimmedCanonical.indexOfLast { !it.isWhitespace() }
+            .let { if (it < 0) trimStart else it + 1 }
+        val canonical = untrimmedCanonical.substring(trimStart, trimEndExclusive)
+        val canonicalProtected = untrimmedProtected.map { range ->
+            check(range.start >= trimStart && range.endExclusive <= trimEndExclusive) {
+                "protected text cannot be removed by canonical whitespace trimming"
+            }
+            TextRange(range.start - trimStart, range.endExclusive - trimStart)
+        }
         val codePoints = raw.codePoints().toArray().toSet()
         val bidiReview = codePoints.any { it in bidiReviewCodePoints }
         val warnings = buildSet {
