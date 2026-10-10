@@ -23,10 +23,20 @@ class NvidiaSttDetailedEvidenceParserTest {
         assertEquals(listOf("Hello", "world."), detailed.result.words.map { it.text })
         assertEquals(206, detailed.result.httpStatus)
         assertTrue(detailed.result.words.all { it.startMs == null && it.endMs == null })
+        // Exact source lexemes are guaranteed by the verbatim raw response, not by JSONObject's
+        // parser-rendered scalar view (for example 0.80 may render as 0.8).
         assertEquals(body, detailed.timingEvidence.rawResponseUtf8)
         assertEquals(NvidiaSttTimingEvidenceInspector.inspect(body), detailed.timingEvidence)
-        assertEquals("0.08", detailed.timingEvidence.sources.single().words.first().startFields.getValue("start").rawText)
-        assertEquals("0.80", detailed.timingEvidence.sources.single().words.last().endFields.getValue("end").rawText)
+        assertEquals(
+            0.08,
+            detailed.timingEvidence.sources.single().words.first().startFields.getValue("start").parsedNumber!!,
+            0.0,
+        )
+        assertEquals(
+            0.80,
+            detailed.timingEvidence.sources.single().words.last().endFields.getValue("end").parsedNumber!!,
+            0.0,
+        )
         assertEquals(NvidiaSttParserContract.ID, detailed.parserVersion)
     }
 
