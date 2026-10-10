@@ -26,6 +26,8 @@ Typed microseconds in the application core do not establish what unit the provid
 
 `NvidiaSttTimingEvidenceInspector` remains the diagnostic pre-normalization capture path. It preserves the verbatim response text/hash plus timing schema/path/field/type observations without selecting a unit or origin.
 
+Durable STT adoption is intentionally independent from clock authorization. An accepted live response can bind an `UNVERIFIED` source snapshot with transcript/word text and null word intervals. A durable `RECEIVED` snapshot can then be reopened and adopted locally without another provider call and without inventing timing. Downstream legacy timeline planning rejects the untimed live result before a translation request receipt or cue timeline can be minted.
+
 ### Explicit authority mapper
 `NvidiaSttAuthoritativeTimingMapper` has no default timing contract. Mapping requires all of the following:
 
@@ -38,7 +40,7 @@ Typed microseconds in the application core do not establish what unit the provid
 - exact word sequence agreement with the accepted transport result;
 - a `VERIFIED_AFFINE` `SampleClockMap` with a nonblank evidence profile.
 
-Decimal offsets are converted exactly to microseconds with no rounding. Positive half-open intervals are required and overlapping/unsorted provider word intervals are rejected rather than clamped.
+Numeric JSON offsets are converted from exact lexemes scanned from the hash-bound raw response rather than from a `Double`/`JSONObject` rendering. Duplicate keys and non-standard JSON fail closed at the authority boundary. Decimal offsets are converted exactly to microseconds with no rounding. Positive half-open intervals are required and overlapping/unsorted provider word intervals are rejected rather than clamped.
 
 ### Presentation origin in the preparer
 `SttAudioPreparer` records the selected audio track's first `MediaExtractor.sampleTime` as `sourceStartUs`, then rebases decoder input timestamps by subtracting that value before writing the STT WAV. Thus the intended affine relation is:
@@ -59,11 +61,15 @@ Therefore neither field names nor numeric magnitude can establish the app's host
 ## Current deterministic regressions
 - `X001ClockEvidenceTest`: ambiguous numeric units, nonzero-origin arithmetic, and N24 tolerances.
 - `NvidiaSttAuthoritativeTimingTest`: exact explicit-unit conversion, exact response/sample binding, profile/schema/field/type drift rejection, unverified-clock rejection, no sub-microsecond rounding, overlap rejection, and half-open cue boundary behavior.
+- `NvidiaSttExactNumericLexemeTest`: exact one-microsecond conversion and rejection when a raw JSON number contains a sub-microsecond remainder that a floating-point rendering could hide.
 - `NvidiaSttDetailedEvidenceParserTest`: accepted text is preserved while interpreted timing remains absent and raw evidence remains separate.
 - `NvidiaSttTransportObservationTest`: production response binding exposes no timing for second-scale, millisecond-scale, or other ambiguous magnitudes.
+- `X001NullTimingDownstreamTest`: untimed hosted words are rejected before the P0-F legacy timeline planner can mint source units.
+- `X001NullTimingDurabilityInstrumentedTest`: live durable adoption and `RECEIVED` recovery are exercised with null interpreted timing; **execution pending**.
+- `X001NullTimingViewModelInstrumentedTest`: ViewModel translation is required to surface a controlled failure before translation request receipts/timeline output when live STT timing is unverified; **execution pending**.
 - `X001PresentationClockInstrumentedTest`: nonzero Android presentation-origin falsifier; **execution pending**.
 
-These tests and code guards prove fail-closed behavior and mapping requirements. They do not prove the exact current hosted NVCF response unit/schema or substitute for an Android execution result.
+The committed guards and regression harness define fail-closed behavior and mapping requirements. Repository Gradle/Android execution has not run on this worker branch, so the tests are not counted as passing evidence yet. They also do not prove the exact current hosted NVCF response unit/schema or substitute for an Android device result.
 
 ## Required capture bundle before X001 verdict
 For a publish-authorized synthetic source (and an original source only if separately available/authorized), capture:
@@ -88,7 +94,8 @@ If raw hosted-unit/origin evidence is absent or clock continuity/origin cannot b
 
 ## Current gaps
 - No hosted NVIDIA NVCF response has been captured on this branch with its exact response hash bound to the exact uploaded WAV hash; exact HTTP response schema/unit/origin therefore remains PENDING.
-- The delayed-origin Android instrumented falsifier has been added but has not yet produced device/API execution evidence on this branch.
+- The delayed-origin Android instrumented falsifier and null-timing durability/ViewModel regressions have been added but have not produced device/API execution evidence on this branch.
+- No repository Gradle/CI run has executed this branch's full unit/instrumented suite; committed tests are harness evidence, not passing-run evidence.
 - No original personal source/media was used or committed.
 - Preview/export currently contains a hard-coded zero sample-start assumption outside W1/X001 scope; verified nonzero-origin activation must not bypass that boundary.
 - Therefore X001 remains **not PASS** despite the fail-closed production guard and expanded regression harness.
