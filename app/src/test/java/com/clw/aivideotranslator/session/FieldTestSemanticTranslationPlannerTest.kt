@@ -56,7 +56,7 @@ class FieldTestSemanticTranslationPlannerTest {
 
     @Test fun keepsFrozenLegacyPlannerAvailableForRegressionComparison() {
         val source = result()
-        val frozen = LegacyParityTranslationPlanner.plan(source)
+        val frozen = LegacyParityTranslationPlanner.planFrozen(source)
         val field = FieldTestSemanticTranslationPlanner.plan(source)
 
         assertTrue(frozen.isNotEmpty())
