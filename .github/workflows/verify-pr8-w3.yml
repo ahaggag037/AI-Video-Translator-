@@ -1,0 +1,78 @@
+name: Verify PR8 W3 exact worker code
+
+on:
+  push:
+    branches: [ 'build/verify-pr8-w3' ]
+    paths:
+      - '.github/workflows/verify-pr8-w3.yml'
+
+jobs:
+  w3-instrumented:
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [29, 35]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ea5831c3984c727b23b0d72a435bba306cdaa137
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Install compile SDK
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run W3 exact-worker instrumentation
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: default
+          arch: x86_64
+          profile: pixel_7_pro
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            export GITHUB_SHA=ea5831c3984c727b23b0d72a435bba306cdaa137
+            bash scripts/run_x003_native_controls.sh
+            TEST_RUNNER="com.clw.aivideotranslator.test/androidx.test.runner.AndroidJUnitRunner"
+            run_one() {
+              local target="$1"
+              local out
+              out="$(adb shell am instrument -w -r -e class "$target" "$TEST_RUNNER" 2>&1)"
+              printf '%s\n' "$out"
+              ! printf '%s\n' "$out" | grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed|INSTRUMENTATION_STATUS_CODE: -2'
+              printf '%s\n' "$out" | grep -Eq 'OK \(1 test\)'
+            }
+            run_one 'com.clw.aivideotranslator.subtitle.android.RasterCoordinatorInstrumentedTest#supersededInFlightRasterCannotPublishStaleContentAndSeekBackRerenders'
+            run_one 'com.clw.aivideotranslator.subtitle.android.SnapshotBitmapOverlayInstrumentedTest#touchingCueBoundarySwitchesAtTheExactHalfOpenTimestamp'
+            run_one 'com.clw.aivideotranslator.subtitle.android.SubtitleRasterizerInstrumentedTest#explicitTwoLineCueRasterizesWithoutDuplicatingItsLineBreak'
+
+      - name: Upload W3 verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-pr8-w3-api${{ matrix.api-level }}
+          path: |
+            app/build/x003-evidence/
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/connected/
+          if-no-files-found: warn
