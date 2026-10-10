@@ -11,7 +11,6 @@ import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -67,7 +66,7 @@ class X006SourceCapturePerformanceInstrumentedTest {
 
             try {
                 assertEquals(TARGET_SOURCE_BYTES, captured.attachment.fingerprint.sizeBytes)
-                assertEquals(expectedSha, captured.attachment.fingerprint.sha256Hex)
+                assertEquals(expectedSha, captured.attachment.fingerprint.sha256)
                 val liveFiles = captureFileNames() - baselineFiles
                 assertEquals("one operation-owned private source copy must be live", 1, liveFiles.size)
 
@@ -101,7 +100,7 @@ class X006SourceCapturePerformanceInstrumentedTest {
                 contentUri = sourceUri(source),
             ).getOrThrow()
             assertEquals(TARGET_SOURCE_BYTES, second.fingerprint.sizeBytes)
-            assertEquals(expectedSha, second.fingerprint.sha256Hex)
+            assertEquals(expectedSha, second.fingerprint.sha256)
             assertEquals(baselineFiles, captureFileNames())
         } finally {
             source.delete()
