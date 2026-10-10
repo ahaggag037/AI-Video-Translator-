@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Synthetic neighboring SOURCE context for the X002 bounded-context shadow experiment; no Arabic targets or human scores.",
+  "cases": [
+    {"id":"n03-technical-pronoun","before":["The extractor selected the primary video stream from the container."],"after":["The original word timestamps remained available for subtitle alignment."]},
+    {"id":"n06-technical-contrast","before":["The client submitted one request and then lost connectivity."],"after":["The recovery flow must not assume the remote operation failed."]},
+    {"id":"n07-technical-reference","before":["The adapter converts provider values before they enter the core."],"after":["The core does not know the provider-specific representation."]},
+    {"id":"n08-technical-pronoun-two","before":["Maya owns parser review, while Omar owns test review."],"after":["Their review notes are recorded separately."]},
+    {"id":"n10-business-negation","before":["The customer is one organization represented by multiple reviewers."],"after":["The optional support package remains outside the signed scope."]},
+    {"id":"n12-business-pronoun","before":["Nadia manages the archive, and Karim edits contract wording."],"after":["The signed copy belongs in Nadia's archive after correction."]},
+    {"id":"n16-business-reference","before":["The founders presented one plan to the board."],"after":["Budget approval is a board decision in this example."]},
+    {"id":"n17-conversation-pronoun","before":["Lina had already told Salma about Lina's plan to arrive early."],"after":["Salma handled the seating arrangements."]},
+    {"id":"n19-conversation-question","before":["A group is coordinating where to meet later."],"after":["They need one clear meeting plan."]},
+    {"id":"n21-conversation-correction","before":["Two folders are visible: a blue one on the left and a green one beside it."],"after":["The speaker is correcting which folder they meant."]},
+    {"id":"n23-conversation-ellipsis","before":["Two people are dividing equipment for a shared setup."],"after":["They will inspect the complete set at the destination."]},
+    {"id":"n24-conversation-ambiguity","before":["Farid had just finished preparing the presentation before meeting Youssef."],"after":["Youssef had not worked on the presentation that day."]}
+  ]
+}
