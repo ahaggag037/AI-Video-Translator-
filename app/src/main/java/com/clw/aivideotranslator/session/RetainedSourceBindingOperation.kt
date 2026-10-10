@@ -34,6 +34,7 @@ internal object RetainedSourceBindingOperation {
         sessionId: String,
         contentUri: String,
         requestedRange: PresentationIntervalUs? = null,
+        onCaptureProgress: (SourceCaptureProgress) -> Unit = {},
     ): Result<RetainedSourceBindingResult> = runCatching {
         val token = SourceBindingToken.from(store.readManifest(sessionId))
         val captured = SourceAttachmentBuilder.capture(
@@ -41,6 +42,7 @@ internal object RetainedSourceBindingOperation {
             sessionId = sessionId,
             contentUri = contentUri,
             requestedRange = requestedRange,
+            onProgress = onCaptureProgress,
         ).getOrThrow()
 
         captured.use { owned ->
