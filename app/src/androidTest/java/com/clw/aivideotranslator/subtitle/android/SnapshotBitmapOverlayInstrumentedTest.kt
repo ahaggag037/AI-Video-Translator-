@@ -63,6 +63,38 @@ class SnapshotBitmapOverlayInstrumentedTest {
     }
 
     @Test
+    fun touchingCueBoundarySwitchesAtTheExactHalfOpenTimestamp() {
+        val calls = AtomicInteger(0)
+        val coordinator = RasterCoordinator(
+            producer = SubtitleRasterProducer { request ->
+                calls.incrementAndGet()
+                fakeReady(request)
+            },
+        )
+        val first = cue("a", 0L, 500_000L, "الأول")
+        val second = cue("b", 500_000L, 1_000_000L, "الثاني")
+        val timeline = SnapshotRasterTimeline(listOf(first, second))
+        val overlay = SnapshotBitmapOverlay(
+            timeline = timeline,
+            expectedGeometry = geometry,
+            exportRangeStartUs = 0L,
+            coordinator = coordinator,
+        )
+        try {
+            assertEquals("a", timeline.locate(499_999L).active?.cueId)
+            assertEquals("b", timeline.locate(500_000L).active?.cueId)
+            overlay.configure(Size(426, 240))
+            val before = overlay.getBitmap(499_999L)
+            val atBoundary = overlay.getBitmap(500_000L)
+            assertNotSame("touching cues must not reuse the stale prior raster", before, atBoundary)
+            assertTrue(calls.get() >= 2)
+        } finally {
+            overlay.release()
+            coordinator.close()
+        }
+    }
+
+    @Test
     fun activeCueRejectionFailsFrameInsteadOfSubstitutingTransparency() {
         val coordinator = RasterCoordinator(
             producer = SubtitleRasterProducer { SubtitleRasterResult.Rejected("SYNTHETIC_REJECTION") },

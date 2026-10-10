@@ -38,6 +38,16 @@ class SubtitleLayoutInstrumentedTest {
         canonical.protectedRanges.forEach { range ->
             assertTrue(boundaries.legalLineBreakOffsets.none { it > range.start && it < range.endExclusive })
         }
+
+        val trimmed = TextPolicy.canonicalView("   https://example.com/opaque ثم")
+        assertEquals("https://example.com/opaque ثم", trimmed.displayCanonical)
+        val trimmedBoundaries = AndroidTextBoundaryProvider().boundaries(trimmed.displayCanonical, trimmed.protectedRanges)
+        assertEquals("https://example.com/opaque", trimmed.protectedRanges.single().let {
+            trimmed.displayCanonical.substring(it.start, it.endExclusive)
+        })
+        trimmed.protectedRanges.forEach { range ->
+            assertTrue(trimmedBoundaries.legalLineBreakOffsets.none { it > range.start && it < range.endExclusive })
+        }
     }
 
     @Test fun emergencyTokenWrapAndMissingGlyphCannotBecomeRenderable() {
@@ -47,6 +57,38 @@ class SubtitleLayoutInstrumentedTest {
         val unsupported = engine.layout("مرحبا 🙂", geometry, font(), environment())
         assertEquals(SubtitleLayoutResult.ReviewRequired("BUNDLED_FONT_GLYPH_UNSUPPORTED"), unsupported)
         assertTrue(engine.layout("مرحبا بكم", geometry, font(), environment()) is SubtitleLayoutResult.Fits)
+    }
+
+    @Test fun mixedArabicNumeralsPunctuationAndMultilineRemainDeterministic() {
+        val engine = SubtitleLayoutEngine()
+        val loaded = font()
+        val geometry = FrameGeometry(854, 480)
+        val fixtures = linkedMapOf(
+            "short" to "نعم.",
+            "mixed" to "يعمل Android 17 مع GPT-6 الآن.",
+            "mixed-numerals" to "السعر 1,250.50 جنيه، والخصم ١٥٪.",
+            "punctuation" to "«هل وصلت الرسالة؟» نعم، الساعة ١٠:٣٠.",
+            "explicit-multiline" to "السطر العربي الأول\nالسطر العربي الثاني",
+        )
+
+        fixtures.forEach { (id, text) ->
+            val first = engine.layout(text, geometry, loaded, environment())
+            val second = engine.layout(text, geometry, loaded, environment())
+            assertEquals("$id layout must be deterministic", first, second)
+            assertTrue("$id must fit the representative 480p geometry", first is SubtitleLayoutResult.Fits)
+            val descriptor = (first as SubtitleLayoutResult.Fits).descriptor
+            assertTrue(descriptor.safeRect.contains(descriptor.inkBounds))
+            assertTrue(descriptor.safeRect.contains(descriptor.boxBounds))
+            assertTrue(descriptor.lineRanges.size in 1..2)
+        }
+
+        val longValid = ("هذه جملة عربية طويلة صالحة لاختبار سلوك الامتلاء دون قص مخفي. ").repeat(400).trim()
+        val longResult = engine.layout(longValid, geometry, loaded, environment())
+        assertFalse("extreme valid cue must not be accepted via hidden clipping", longResult is SubtitleLayoutResult.Fits)
+        assertTrue(longResult.status in setOf(SubtitleLayoutStatus.OVERFLOW, SubtitleLayoutStatus.REVIEW_REQUIRED))
+
+        val bidiReview = engine.layout("مرحبا\u202Eabc", geometry, loaded, environment())
+        assertEquals(SubtitleLayoutStatus.REVIEW_REQUIRED, bidiReview.status)
     }
 
     @Test fun recordNativeGeometryOutcomesWithoutInventingReadabilityPassRate() {

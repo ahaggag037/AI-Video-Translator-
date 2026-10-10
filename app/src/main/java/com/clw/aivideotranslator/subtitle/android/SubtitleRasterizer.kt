@@ -49,7 +49,7 @@ class SubtitleRasterizer(
             return SubtitleRasterResult.Rejected("LAYOUT_DESCRIPTOR_MISMATCH")
         }
 
-        val displayText = displayText(descriptor)
+        val displayText = SubtitleDisplayText.fromSemanticLines(descriptor.text, descriptor.lineRanges)
             ?: return SubtitleRasterResult.Rejected("LINE_RANGE_MISMATCH")
         val safeWidth = descriptor.safeRect.right - descriptor.safeRect.left
         val layout = buildLayout(
@@ -118,17 +118,6 @@ class SubtitleRasterizer(
         } finally {
             mutable.recycle()
         }
-    }
-
-    private fun displayText(descriptor: SubtitleLayoutDescriptor): String? {
-        if (descriptor.lineRanges.size == 1) return descriptor.text
-        val first = descriptor.lineRanges[0]
-        val second = descriptor.lineRanges[1]
-        val breakOffset = first.last + 1
-        if (first.first != 0 || second.first != breakOffset || second.last != descriptor.text.lastIndex) {
-            return null
-        }
-        return descriptor.text.substring(0, breakOffset) + "\n" + descriptor.text.substring(breakOffset)
     }
 
     private fun buildLayout(
