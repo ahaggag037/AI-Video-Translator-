@@ -4,6 +4,8 @@ import com.clw.aivideotranslator.NvidiaSttResult
 import com.clw.aivideotranslator.NvidiaWord
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -73,6 +75,30 @@ class FieldTestSttWindowJournalStoreTest {
         }
     }
 
+    @Test fun explicitNewSessionPreservesUnknownSentAndUsesFreshOperationIdentity() {
+        val root = Files.createTempDirectory("field-stt-explicit-recovery").toFile()
+        try {
+            val store = FieldTestSttWindowJournalStore(root)
+            val oldPrepared = prepared(sessionId = "session-a")
+            store.persistPrepared(oldPrepared)
+            val oldSent = store.markSent(oldPrepared.copy(phase = FieldTestSttWindowAttemptPhase.SENT))
+
+            val freshPrepared = prepared(sessionId = "session-b")
+            assertNotEquals(oldSent.attemptId, freshPrepared.attemptId)
+            store.persistPrepared(freshPrepared)
+
+            val reopenedOld = store.readOrNull(oldSent.sessionId, oldSent.attemptId)
+            assertNotNull(reopenedOld)
+            assertEquals(
+                FieldTestSttWindowRecoveryDisposition.UNKNOWN_REMOTE_OUTCOME,
+                reopenedOld!!.recoveryDisposition(),
+            )
+            assertEquals(freshPrepared, store.readOrNull(freshPrepared.sessionId, freshPrepared.attemptId))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun clearSessionRemovesOnlyThatFieldTestJournal() {
         val root = Files.createTempDirectory("field-stt-clear").toFile()
         try {
@@ -86,11 +112,11 @@ class FieldTestSttWindowJournalStoreTest {
         }
     }
 
-    private fun prepared(): FieldTestSttWindowReceipt {
+    private fun prepared(sessionId: String = "session-a"): FieldTestSttWindowReceipt {
         val window = FieldTestSttWindow(0, 0L, 60_000_000L)
         return FieldTestSttWindowReceipt(
-            attemptId = FieldTestSttWindowAttemptIdentity.forWindow("session-a", "source-a", window),
-            sessionId = "session-a",
+            attemptId = FieldTestSttWindowAttemptIdentity.forWindow(sessionId, "source-a", window),
+            sessionId = sessionId,
             sourceAttachmentId = "source-a",
             windowIndex = window.index,
             startUs = window.startUs,
