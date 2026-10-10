@@ -37,6 +37,10 @@ internal data class ProductionSttAudioWindow(
  * The writer never materializes full-video decoded audio. Incoming PCM is split at exact sample-frame
  * boundaries. As soon as one window is full its WAV header is finalized, the file is closed, and a
  * callback receives an immutable window while later PCM continues into a new file.
+ *
+ * Ownership rule: once [onWindowFinalized] returns successfully, that file belongs to the consumer
+ * and this writer will never delete it. This permits concurrent STT consumption while later decode
+ * continues. Files that have not been handed off remain writer-owned and are removed on abort.
  */
 internal class PcmWindowFileWriter(
     private val outputDir: File,
@@ -53,7 +57,7 @@ internal class PcmWindowFileWriter(
     private var nextIndex = 0
     private var closed = false
     private var finished = false
-    private val createdFiles = mutableListOf<File>()
+    private val writerOwnedFiles = mutableListOf<File>()
 
     init {
         require(sampleRateHz > 0) { "sample rate must be positive" }
@@ -104,12 +108,13 @@ internal class PcmWindowFileWriter(
         closed = true
         if (!finished) {
             closeCurrentHandle()
-            createdFiles.forEach { file ->
+            writerOwnedFiles.forEach { file ->
                 if (file.exists() && !file.delete()) file.deleteOnExit()
             }
         } else {
             closeCurrentHandle()
         }
+        writerOwnedFiles.clear()
     }
 
     private fun ensureOpenWindow() {
@@ -128,7 +133,7 @@ internal class PcmWindowFileWriter(
         currentFile = file
         currentRaf = raf
         currentFrames = 0L
-        createdFiles += file
+        writerOwnedFiles += file
     }
 
     private fun finalizeCurrentWindow() {
@@ -162,6 +167,8 @@ internal class PcmWindowFileWriter(
         nextIndex += 1
         currentFrames = 0L
         onWindowFinalized(window)
+        // Consumer now owns this immutable file. Later producer failure must not delete it.
+        writerOwnedFiles.remove(file)
     }
 
     private fun closeCurrentHandle() {
