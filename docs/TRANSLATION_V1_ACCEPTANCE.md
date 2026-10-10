@@ -1,6 +1,6 @@
 # Translation & Subtitle V1 — Current State and Acceptance
 
-**NOT RELEASE-READY.** This is the single operational state/evidence index for the active V1 branch. Historical worker handoffs, relay instructions, phase journals, and superseded status pages are intentionally excluded from the active documentation surface.
+**NOT RELEASE-READY.** This is the single operational state/evidence index for the active V1 branch. Historical worker handoffs, relay instructions, phase journals, P0-era ADRs, and superseded status pages are intentionally excluded from the active documentation surface.
 
 ## Repository identity
 
@@ -10,7 +10,6 @@
 - Accepted architecture deltas: `docs/TRANSLATION_V1_ARCHITECTURE_AMENDMENTS.md`
 - Frozen regression evidence: `docs/P0F_REGRESSION_BASELINE.md`
 - Experiment evidence: `docs/experiments/**`
-- ADRs: `docs/adr/**`
 
 Refetch the live branch HEAD and CI before every consequential write. Documentation-only descendants are not new implementation verification anchors.
 
@@ -23,7 +22,7 @@ Exact successful checks observed at this SHA:
 - X003 Native Layout Controls `38017688016`: **SUCCESS**.
 - X005 Android Recovery `38017688010`: **SUCCESS**.
 
-This checkpoint descends from the already-activated Task17 durable source/STT/legacy-translation path. The documentation-cleanup commits that follow it do not change the implementation anchor unless code changes and fresh verification explicitly supersede it.
+This checkpoint descends from the already-activated Task17 durable source/STT/legacy-translation path. Documentation-cleanup descendants do not change the implementation anchor unless code changes and fresh verification explicitly supersede it.
 
 ## Active product truth
 
@@ -79,6 +78,6 @@ Keep in the active branch only:
 - the concise repository `README.md`;
 - accepted architecture amendments;
 - frozen regression evidence still needed for comparison;
-- ADRs and experiment evidence that support reproducibility/auditability.
+- experiment evidence that supports reproducibility/auditability.
 
-Delete superseded phase-status notes, worker-specific execution/handoff files, and obsolete architecture summaries from the active branch. Git history remains the historical archive.
+Delete superseded phase-status notes, worker-specific execution/handoff files, old P0 ADRs, and obsolete architecture summaries from the active branch. Git history remains the historical archive.
