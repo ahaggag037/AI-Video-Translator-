@@ -25,16 +25,32 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+enum class SnapshotBurnedExportPhase {
+    RENDERING,
+    VALIDATING,
+    COMPLETE,
+    FAILED,
+    CANCELLED,
+    ;
+
+    val isTerminal: Boolean get() = this == COMPLETE || this == FAILED || this == CANCELLED
+}
 
 @OptIn(UnstableApi::class)
 internal class SnapshotBurnedExportSession(
     private val transformer: Transformer,
     private val outputFile: File,
     private val finished: AtomicBoolean,
+    private val phase: AtomicReference<SnapshotBurnedExportPhase>,
     private val cleanup: () -> Unit,
     private val validationExecutor: java.util.concurrent.ExecutorService,
 ) {
+    fun phase(): SnapshotBurnedExportPhase = phase.get()
+
     fun progress(): Int? {
+        if (phase.get() != SnapshotBurnedExportPhase.RENDERING) return null
         val holder = ProgressHolder()
         return if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
             holder.progress
@@ -44,7 +60,14 @@ internal class SnapshotBurnedExportSession(
     }
 
     fun cancel() {
-        if (!finished.compareAndSet(false, true)) return
+        val current = phase.get()
+        if (current.isTerminal) return
+        phase.set(SnapshotBurnedExportPhase.CANCELLED)
+        if (!finished.compareAndSet(false, true)) {
+            validationExecutor.shutdownNow()
+            outputFile.delete()
+            return
+        }
         runCatching { transformer.cancel() }
         cleanup()
         outputFile.delete()
@@ -63,6 +86,7 @@ internal object SnapshotBurnedSubtitleExporter {
         sampleEndMs: Long,
         onCompleted: (BurnedVideoResult) -> Unit,
         onError: (String) -> Unit,
+        onPhaseChanged: (SnapshotBurnedExportPhase) -> Unit = {},
     ): SnapshotBurnedExportSession {
         require(sampleStartMs >= 0L && sampleEndMs > sampleStartMs) { "نافذة الفيديو غير صالحة" }
         val sampleStartUs = Math.multiplyExact(sampleStartMs, 1_000L)
@@ -91,10 +115,16 @@ internal object SnapshotBurnedSubtitleExporter {
             }
         }
         val finished = AtomicBoolean(false)
+        val phase = AtomicReference(SnapshotBurnedExportPhase.RENDERING)
         val validationExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "subtitle-export-validator").apply { isDaemon = true }
         }
         val mainHandler = Handler(Looper.getMainLooper())
+
+        fun setPhase(next: SnapshotBurnedExportPhase) {
+            phase.set(next)
+            mainHandler.post { onPhaseChanged(next) }
+        }
 
         val mediaItem = MediaItem.Builder()
             .setUri(sourceUri)
@@ -118,6 +148,7 @@ internal object SnapshotBurnedSubtitleExporter {
             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                 if (!finished.compareAndSet(false, true)) return
                 cleanup()
+                setPhase(SnapshotBurnedExportPhase.VALIDATING)
                 validationExecutor.execute {
                     val validated = runCatching {
                         validate(
@@ -128,7 +159,13 @@ internal object SnapshotBurnedSubtitleExporter {
                     }
                     validationExecutor.shutdown()
                     mainHandler.post {
-                        validated.onSuccess(onCompleted).onFailure { error ->
+                        validated.onSuccess { result ->
+                            phase.set(SnapshotBurnedExportPhase.COMPLETE)
+                            onPhaseChanged(SnapshotBurnedExportPhase.COMPLETE)
+                            onCompleted(result)
+                        }.onFailure { error ->
+                            phase.set(SnapshotBurnedExportPhase.FAILED)
+                            onPhaseChanged(SnapshotBurnedExportPhase.FAILED)
                             outputFile.delete()
                             onError(error.message ?: "تم التصدير لكن فشل التحقق من ملف MP4")
                         }
@@ -142,9 +179,11 @@ internal object SnapshotBurnedSubtitleExporter {
                 exportException: ExportException,
             ) {
                 if (!finished.compareAndSet(false, true)) return
+                phase.set(SnapshotBurnedExportPhase.FAILED)
                 cleanup()
                 validationExecutor.shutdownNow()
                 outputFile.delete()
+                onPhaseChanged(SnapshotBurnedExportPhase.FAILED)
                 onError(exportException.message ?: "فشل إنشاء فيديو MP4 المترجم")
             }
         }
@@ -156,18 +195,22 @@ internal object SnapshotBurnedSubtitleExporter {
             .build()
         return try {
             transformer.start(editedMediaItem, outputFile.absolutePath)
+            onPhaseChanged(SnapshotBurnedExportPhase.RENDERING)
             SnapshotBurnedExportSession(
                 transformer = transformer,
                 outputFile = outputFile,
                 finished = finished,
+                phase = phase,
                 cleanup = cleanup,
                 validationExecutor = validationExecutor,
             )
         } catch (error: Throwable) {
             finished.set(true)
+            phase.set(SnapshotBurnedExportPhase.FAILED)
             cleanup()
             validationExecutor.shutdownNow()
             outputFile.delete()
+            onPhaseChanged(SnapshotBurnedExportPhase.FAILED)
             throw error
         }
     }
