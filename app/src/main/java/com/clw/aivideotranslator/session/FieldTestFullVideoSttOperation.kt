@@ -6,6 +6,43 @@ import com.clw.aivideotranslator.NvidiaSttResult
 import com.clw.aivideotranslator.NvidiaSttWireContract
 import java.io.File
 
+internal enum class FieldTestSttProgressStage {
+    PREPARING_AUDIO,
+    PREFLIGHT,
+    PREPARING_WINDOW,
+    REUSING_RECEIVED,
+    SENDING,
+    WAITING_RESPONSE,
+    RECEIVED,
+    ASSEMBLING,
+}
+
+internal data class FieldTestSttProgress(
+    val stage: FieldTestSttProgressStage,
+    val currentWindow: Int? = null,
+    val totalWindows: Int? = null,
+    val completedWindows: Int = 0,
+    val windowStartUs: Long? = null,
+    val windowEndUs: Long? = null,
+) {
+    init {
+        require(currentWindow == null || currentWindow >= 1) { "current STT window must be one-based" }
+        require(totalWindows == null || totalWindows >= 1) { "total STT windows must be positive" }
+        require(completedWindows >= 0) { "completed STT windows cannot be negative" }
+        if (currentWindow != null && totalWindows != null) {
+            require(currentWindow <= totalWindows) { "current STT window exceeds total" }
+        }
+        if (totalWindows != null) {
+            require(completedWindows <= totalWindows) { "completed STT windows exceeds total" }
+        }
+        if (windowStartUs != null || windowEndUs != null) {
+            val start = requireNotNull(windowStartUs)
+            val end = requireNotNull(windowEndUs)
+            require(start >= 0L && end > start) { "invalid STT progress window interval" }
+        }
+    }
+}
+
 /**
  * Round-2 field-test execution path for full-video STT.
  *
@@ -20,6 +57,7 @@ internal object FieldTestFullVideoSttOperation {
         store: TranslationSessionStore,
         sessionId: String,
         apiKey: String,
+        onProgress: (FieldTestSttProgress) -> Unit = {},
     ): Result<NvidiaSttResult> = runCatching {
         require(apiKey.trim().isNotEmpty()) { "STT API key is blank" }
         val attachment = requireNotNull(store.readActiveSourceAttachment(sessionId)) {
@@ -29,6 +67,7 @@ internal object FieldTestFullVideoSttOperation {
             File(context.filesDir, FIELD_TEST_JOURNAL_DIRECTORY),
         )
 
+        onProgress(FieldTestSttProgress(stage = FieldTestSttProgressStage.PREPARING_AUDIO))
         val workDir = File(
             context.cacheDir,
             "$FIELD_TEST_WINDOW_DIRECTORY/${attachment.attachmentId}",
@@ -47,10 +86,17 @@ internal object FieldTestFullVideoSttOperation {
         require(plannedWindows.last().endUs <= attachment.durationUs) {
             "last STT window exceeds source attachment"
         }
+        val totalWindows = plannedWindows.size
 
         // Local media decoding is safe to repeat. Remote submission is not. After deterministic
         // windows are known, preflight the complete journal before any provider call so a SENT
         // receipt anywhere in the batch prevents blind resubmission.
+        onProgress(
+            FieldTestSttProgress(
+                stage = FieldTestSttProgressStage.PREFLIGHT,
+                totalWindows = totalWindows,
+            ),
+        )
         val preflight = plannedWindows.associateWith { window ->
             val attemptId = FieldTestSttWindowAttemptIdentity.forWindow(
                 sessionId = sessionId,
@@ -76,6 +122,13 @@ internal object FieldTestFullVideoSttOperation {
             }
         }
         if (alreadyReceived.size == plannedWindows.size) {
+            onProgress(
+                FieldTestSttProgress(
+                    stage = FieldTestSttProgressStage.ASSEMBLING,
+                    totalWindows = totalWindows,
+                    completedWindows = totalWindows,
+                ),
+            )
             requireCurrentSource(context, attachment, "before recovered full-video STT assembly")
             return@runCatching FieldTestSttBatchAssembler.assemble(alreadyReceived)
         }
@@ -84,6 +137,20 @@ internal object FieldTestFullVideoSttOperation {
         val results = mutableListOf<FieldTestSttBatchAssembler.WindowResult>()
         for (preparedWindow in prepared.windows) {
             val window = preparedWindow.window
+            val oneBasedWindow = window.index + 1
+            fun emit(stage: FieldTestSttProgressStage, completedWindows: Int = results.size) {
+                onProgress(
+                    FieldTestSttProgress(
+                        stage = stage,
+                        currentWindow = oneBasedWindow,
+                        totalWindows = totalWindows,
+                        completedWindows = completedWindows,
+                        windowStartUs = window.startUs,
+                        windowEndUs = window.endUs,
+                    ),
+                )
+            }
+
             val attemptId = FieldTestSttWindowAttemptIdentity.forWindow(
                 sessionId = sessionId,
                 sourceAttachmentId = attachment.attachmentId,
@@ -100,12 +167,17 @@ internal object FieldTestFullVideoSttOperation {
                             window = window,
                             result = requireNotNull(existing.result),
                         )
+                        emit(
+                            stage = FieldTestSttProgressStage.REUSING_RECEIVED,
+                            completedWindows = results.size,
+                        )
                         continue
                     }
                     FieldTestSttWindowRecoveryDisposition.SAFE_TO_SUBMIT -> Unit
                 }
             }
 
+            emit(FieldTestSttProgressStage.PREPARING_WINDOW)
             val sampleSha256 = SttAttemptSampleDigest.sha256(preparedWindow.profile.file)
             val preparedReceipt = FieldTestSttWindowReceipt(
                 attemptId = attemptId,
@@ -122,9 +194,11 @@ internal object FieldTestFullVideoSttOperation {
 
             // SENT is durable before transport can run. Any exception/process death after this write
             // intentionally leaves UNKNOWN_REMOTE_OUTCOME for the next invocation.
+            emit(FieldTestSttProgressStage.SENDING)
             val sent = journal.markSent(
                 preparedReceipt.copy(phase = FieldTestSttWindowAttemptPhase.SENT),
             )
+            emit(FieldTestSttProgressStage.WAITING_RESPONSE)
             val observation = NvidiaSttClient.transcribeEnglishSampleDetailed(
                 apiKey = apiKey,
                 wavFile = preparedWindow.profile.file,
@@ -146,8 +220,19 @@ internal object FieldTestFullVideoSttOperation {
                 window = window,
                 result = requireNotNull(received.result),
             )
+            emit(
+                stage = FieldTestSttProgressStage.RECEIVED,
+                completedWindows = results.size,
+            )
         }
 
+        onProgress(
+            FieldTestSttProgress(
+                stage = FieldTestSttProgressStage.ASSEMBLING,
+                totalWindows = totalWindows,
+                completedWindows = results.size,
+            ),
+        )
         requireCurrentSource(context, attachment, "after full-video STT transport")
         require(results.size == plannedWindows.size) { "full-video STT did not account for every source window" }
         FieldTestSttBatchAssembler.assemble(results)
