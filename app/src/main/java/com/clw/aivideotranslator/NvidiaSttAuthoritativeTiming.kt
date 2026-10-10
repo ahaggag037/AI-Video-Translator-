@@ -66,7 +66,8 @@ internal data class NvidiaAuthoritativeWordTiming(
  * - a VERIFIED_AFFINE sample clock carrying its own evidence profile.
  *
  * Any mismatch rejects the mapping. No clamp, rounding, fallback unit, or presentation-zero default
- * exists here.
+ * exists here. Numeric JSON tokens are converted from their exact raw-response lexemes rather than
+ * JSONObject/Double renderings, so a sub-microsecond remainder cannot disappear before validation.
  */
 internal object NvidiaSttAuthoritativeTimingMapper {
     fun map(
@@ -111,6 +112,10 @@ internal object NvidiaSttAuthoritativeTimingMapper {
             "unsupported provider timing origin"
         }
 
+        // JSONObject normalizes numeric tokens. Build a strict path->number-lexeme index from the
+        // already hash-bound raw response so exact decimal validation does not depend on Double.
+        val exactNumberLexemes = StrictJsonNumberLexemeIndex.index(evidence.rawResponseUtf8)
+
         val mapped = source.words.mapIndexed { ordinal, word ->
             require(word.itemIndex == ordinal) { "observed timing word ordinals are not contiguous" }
             val acceptedWord = transport.result.words[ordinal]
@@ -125,13 +130,17 @@ internal object NvidiaSttAuthoritativeTimingMapper {
             }
             val startUs = exactOffsetUs(
                 field = word.startFields.getValue(contract.startField),
+                fieldPath = "${word.itemPath}.${contract.startField}",
                 expectedType = contract.valueType,
                 unit = contract.unit,
+                exactNumberLexemes = exactNumberLexemes,
             )
             val endUs = exactOffsetUs(
                 field = word.endFields.getValue(contract.endField),
+                fieldPath = "${word.itemPath}.${contract.endField}",
                 expectedType = contract.valueType,
                 unit = contract.unit,
+                exactNumberLexemes = exactNumberLexemes,
             )
             val audio = AudioIntervalUs(AudioTimeUs(startUs), AudioTimeUs(endUs))
             NvidiaAuthoritativeWordTiming(
@@ -151,12 +160,20 @@ internal object NvidiaSttAuthoritativeTimingMapper {
 
     private fun exactOffsetUs(
         field: NvidiaRawTimingValueEvidence,
+        fieldPath: String,
         expectedType: NvidiaRawJsonValueType,
         unit: NvidiaSttTimingContract.OffsetUnit,
+        exactNumberLexemes: Map<String, String>,
     ): Long {
         require(field.jsonType == expectedType) { "timing scalar representation changed" }
+        val exactDecimalText = when (expectedType) {
+            NvidiaRawJsonValueType.NUMBER -> exactNumberLexemes[fieldPath]
+                ?: throw IllegalArgumentException("exact numeric timing lexeme is missing")
+            NvidiaRawJsonValueType.STRING -> field.rawText
+            else -> error("unsupported timing scalar representation")
+        }
         val decimal = try {
-            BigDecimal(field.rawText)
+            BigDecimal(exactDecimalText)
         } catch (error: NumberFormatException) {
             throw IllegalArgumentException("timing field is not an exact decimal", error)
         }
@@ -170,5 +187,171 @@ internal object NvidiaSttAuthoritativeTimingMapper {
         } catch (error: ArithmeticException) {
             throw IllegalArgumentException("timing offset cannot be represented exactly in microseconds", error)
         }
+    }
+}
+
+/**
+ * Strict JSON scanner used only to retain exact numeric token lexemes at stable JSON paths.
+ * It does not select a provider schema or unit. Duplicate object keys and non-standard JSON are
+ * rejected so authority fails closed instead of inheriting JSONObject's normalization/leniency.
+ */
+private class StrictJsonNumberLexemeIndex private constructor(private val source: String) {
+    private var offset = 0
+    private val values = linkedMapOf<String, String>()
+
+    fun parse(): Map<String, String> {
+        skipWhitespace()
+        parseValue("$")
+        skipWhitespace()
+        require(offset == source.length) { "trailing data after hosted JSON response" }
+        return values.toMap()
+    }
+
+    private fun parseValue(path: String) {
+        skipWhitespace()
+        require(offset < source.length) { "unexpected end of hosted JSON response" }
+        when (source[offset]) {
+            '{' -> parseObject(path)
+            '[' -> parseArray(path)
+            '"' -> parseString()
+            't' -> consumeLiteral("true")
+            'f' -> consumeLiteral("false")
+            'n' -> consumeLiteral("null")
+            '-', in '0'..'9' -> {
+                val lexeme = parseNumber()
+                require(values.put(path, lexeme) == null) { "duplicate numeric JSON path" }
+            }
+            else -> throw IllegalArgumentException("non-standard hosted JSON token at offset $offset")
+        }
+    }
+
+    private fun parseObject(path: String) {
+        expect('{')
+        skipWhitespace()
+        if (consumeIf('}')) return
+        val keys = mutableSetOf<String>()
+        while (true) {
+            skipWhitespace()
+            require(offset < source.length && source[offset] == '"') { "JSON object key must be quoted" }
+            val key = parseString()
+            require(keys.add(key)) { "duplicate JSON object key" }
+            skipWhitespace()
+            expect(':')
+            parseValue(childPath(path, key))
+            skipWhitespace()
+            when {
+                consumeIf('}') -> return
+                consumeIf(',') -> Unit
+                else -> throw IllegalArgumentException("expected ',' or '}' in hosted JSON object")
+            }
+        }
+    }
+
+    private fun parseArray(path: String) {
+        expect('[')
+        skipWhitespace()
+        if (consumeIf(']')) return
+        var index = 0
+        while (true) {
+            parseValue("$path[$index]")
+            index += 1
+            skipWhitespace()
+            when {
+                consumeIf(']') -> return
+                consumeIf(',') -> Unit
+                else -> throw IllegalArgumentException("expected ',' or ']' in hosted JSON array")
+            }
+        }
+    }
+
+    private fun parseString(): String {
+        expect('"')
+        val decoded = StringBuilder()
+        while (offset < source.length) {
+            val character = source[offset++]
+            when {
+                character == '"' -> return decoded.toString()
+                character == '\\' -> {
+                    require(offset < source.length) { "unterminated JSON escape" }
+                    when (val escaped = source[offset++]) {
+                        '"', '\\', '/' -> decoded.append(escaped)
+                        'b' -> decoded.append('\b')
+                        'f' -> decoded.append('\u000c')
+                        'n' -> decoded.append('\n')
+                        'r' -> decoded.append('\r')
+                        't' -> decoded.append('\t')
+                        'u' -> {
+                            require(offset + 4 <= source.length) { "short JSON unicode escape" }
+                            val digits = source.substring(offset, offset + 4)
+                            require(digits.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+                                "invalid JSON unicode escape"
+                            }
+                            decoded.append(digits.toInt(16).toChar())
+                            offset += 4
+                        }
+                        else -> throw IllegalArgumentException("invalid JSON escape")
+                    }
+                }
+                character.code < 0x20 -> throw IllegalArgumentException("unescaped JSON control character")
+                else -> decoded.append(character)
+            }
+        }
+        throw IllegalArgumentException("unterminated JSON string")
+    }
+
+    private fun parseNumber(): String {
+        val start = offset
+        consumeIf('-')
+        require(offset < source.length) { "incomplete JSON number" }
+        if (consumeIf('0')) {
+            require(offset >= source.length || source[offset] !in '0'..'9') { "leading zero in JSON number" }
+        } else {
+            require(source[offset] in '1'..'9') { "invalid JSON number" }
+            while (offset < source.length && source[offset] in '0'..'9') offset += 1
+        }
+        if (consumeIf('.')) {
+            require(offset < source.length && source[offset] in '0'..'9') { "fraction requires digits" }
+            while (offset < source.length && source[offset] in '0'..'9') offset += 1
+        }
+        if (offset < source.length && (source[offset] == 'e' || source[offset] == 'E')) {
+            offset += 1
+            if (offset < source.length && (source[offset] == '+' || source[offset] == '-')) offset += 1
+            require(offset < source.length && source[offset] in '0'..'9') { "exponent requires digits" }
+            while (offset < source.length && source[offset] in '0'..'9') offset += 1
+        }
+        return source.substring(start, offset)
+    }
+
+    private fun consumeLiteral(literal: String) {
+        require(source.regionMatches(offset, literal, 0, literal.length)) { "invalid JSON literal" }
+        offset += literal.length
+    }
+
+    private fun childPath(parent: String, key: String): String =
+        if (key.isNotEmpty() && key.all { it == '_' || it.isLetterOrDigit() }) {
+            "$parent.$key"
+        } else {
+            "$parent['${key.replace("\\", "\\\\").replace("'", "\\'")}']"
+        }
+
+    private fun skipWhitespace() {
+        while (offset < source.length && source[offset] in charArrayOf(' ', '\n', '\r', '\t')) offset += 1
+    }
+
+    private fun expect(expected: Char) {
+        require(offset < source.length && source[offset] == expected) { "expected '$expected' in hosted JSON" }
+        offset += 1
+    }
+
+    private fun consumeIf(expected: Char): Boolean {
+        if (offset < source.length && source[offset] == expected) {
+            offset += 1
+            return true
+        }
+        return false
+    }
+
+    companion object {
+        fun index(source: String): Map<String, String> = StrictJsonNumberLexemeIndex(source).parse()
     }
 }
