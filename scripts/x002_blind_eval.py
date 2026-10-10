@@ -122,6 +122,7 @@ def validate_paired(
     return indexed
 
 
+
 def template(args: argparse.Namespace) -> None:
     corpus, order = load_corpus(args.corpus)
     contexts = load_contexts(args.contexts, set(order))
