@@ -3,6 +3,7 @@ package com.clw.aivideotranslator
 import android.app.Application
 import com.clw.aivideotranslator.session.ActiveSessionRegistry
 import com.clw.aivideotranslator.session.SessionManifest
+import com.clw.aivideotranslator.session.SessionSourceVault
 import com.clw.aivideotranslator.session.TranslationRequestPlanStore
 import com.clw.aivideotranslator.session.TranslationSessionStore
 import java.io.File
@@ -18,8 +19,20 @@ class AiVideoTranslatorApplication : Application() {
         File(noBackupFilesDir, SESSION_DIRECTORY)
     }
 
+    private val retainedSourceRoot: File by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        File(noBackupFilesDir, RETAINED_SOURCE_DIRECTORY)
+    }
+
     internal val translationSessions: TranslationSessionStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         TranslationSessionStore(translationSessionRoot)
+    }
+
+    /**
+     * Exact source bytes captured+hashed once for a session. This is a media owner, not a second
+     * session-state writer; manifest/request/receipt truth remains in [translationSessions].
+     */
+    internal val sessionSources: SessionSourceVault by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        SessionSourceVault(retainedSourceRoot)
     }
 
     internal val translationRequestPlans: TranslationRequestPlanStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
@@ -42,5 +55,6 @@ class AiVideoTranslatorApplication : Application() {
 
     internal companion object {
         const val SESSION_DIRECTORY = "translation_sessions"
+        const val RETAINED_SOURCE_DIRECTORY = "translation_session_sources"
     }
 }
