@@ -16,18 +16,19 @@ Refetch the live branch HEAD and CI before every consequential write. Documentat
 
 ## Latest verified implementation anchor
 
-**`550376b83cf845cedcdf114708632aff1d007134`** — merge of PR #8, `W3 X003/X004 presentation hardening`.
+**`83959720b14a6a5050c6209756f02d69ab78cba3`** — canonical merge of PR #9 after the already-integrated W2/X002 and W3/X003+X004 work, adding the consolidated X006 qualification harnesses without changing production semantics.
 
 Exact successful checks observed for this canonical implementation SHA:
-- Android CI `38030554683`: **SUCCESS** — unit tests, lint, debug APK build, APK existence/signature/checksum, and artifact upload.
-- X003 Native Layout Controls `38030554666`: **SUCCESS** on API 29 and API 35.
-- X005 Android Recovery `38030554647`: **SUCCESS** as descendant compatibility evidence only; the frozen X005 PASS anchor does not move.
+- Android CI `38041521965`: **SUCCESS** — unit tests, lint, debug APK build, APK existence/signature/checksum, and artifact upload.
+- X003 Native Layout Controls `38041521981`: **SUCCESS** on API 29 and API 35.
+- X005 Android Recovery `38041521968`: **SUCCESS** as descendant compatibility evidence only; the frozen X005 PASS anchor does not move.
 
-Pre-merge exact-worker evidence for W3 head `ea5831c3984c727b23b0d72a435bba306cdaa137` also succeeded:
-- Android CI `38029681380`: **SUCCESS**.
-- Integrator exact-code X003 verification `38030134611`: **SUCCESS** on API 29 and API 35, including the added stale-raster, touching-cue-boundary, and explicit-multiline falsifiers.
+Exact pre-merge X006 evidence for synced worker head `60a15145abc6e7d7f6995c478f8bb2990db5a62a`:
+- X006 Performance Qualification `38040352226`: **SUCCESS** — build/unit/lint/APKs and API35 instrumentation all green. This remains emulator staging evidence, not target-device acceptance.
 
-The canonical merge fixes the protected-range remap after canonical trimming, preserves explicit multiline raster truth, keeps preview playback through the complete source sample, and strengthens X003/X004 falsifiers without introducing a second rendering truth. These automated checks do **not** replace the remaining human or physical-target-device acceptance evidence.
+X002 was integrated earlier at canonical merge `091dfa3c82e1724d70d4618eea316f03e9341b45` with Android CI `38039985996`: **SUCCESS**. The integration is shadow-only; it does not switch production translation away from the legacy comparator.
+
+W3 presentation hardening remains integrated from PR #8. Its automated checks and the newer canonical descendant checks do **not** replace the remaining human or physical-target-device acceptance evidence.
 
 ## Active product truth
 
@@ -36,21 +37,22 @@ The canonical merge fixes the protected-range remap after canonical trimming, pr
 - STT lifecycle is durable: `PREPARED → SENT → RECEIVED → ADOPTED`.
 - `SENT` with uncertain remote outcome is never blindly reposted.
 - Accepted STT/translation text can be recovered after restart without another provider call where the durable receipt permits it.
-- Legacy P0-F translation segmentation/profile remains the production comparator until X002 closes.
+- Legacy P0-F translation segmentation/profile remains production truth; X002 semantic behavior is integrated only as a shadow/evaluation path.
 - Shared raster subtitle presentation is wired into preview/export on the canonical branch.
-- W3 presentation hardening is integrated on canonical and verified by Android CI plus API29/API35 instrumentation.
-- Activation and automated hardening do not equal acceptance: timing, semantic-switch, human readability, physical-device media parity, and performance gates remain independently controlled.
+- W3 presentation hardening is integrated and remains green through the current canonical descendant.
+- X006 source-copy/hash, large-timeline, seek, raster-retention, and target-device-runner harnesses are integrated; emulator staging is green.
+- Activation and automated hardening do not equal acceptance: timing, semantic-switch, human readability, physical-device media parity, and target-device performance remain independently controlled.
 
 ## Experiment gates
 
 | Gate | Current state | Acceptance boundary |
 |---|---|---|
-| X001 clock mapping | `HARNESS_READY_PARTIAL` | Requires real hosted response bound to exact sample plus independently verified presentation origin. No guessed timing-unit/origin promotion. |
-| X002 translation | `HARNESS_READY` | Requires paired legacy/semantic outputs and blind Arabic human scoring before semantic translation becomes production truth. |
+| X001 clock mapping | `HARNESS_READY_PARTIAL / FAIL_CLOSED` | Requires real hosted response bound to exact sample plus independently verified presentation origin. No guessed timing-unit/origin promotion. Integrator verification is actively hardening the nonzero-presentation-origin fixture. |
+| X002 translation | `INTEGRATED_SHADOW / HARNESS_READY / HUMAN_PROVIDER_PENDING` | Deterministic shadow evaluation and blind-scoring tooling are integrated. Requires paired live legacy/semantic provider outputs and blind Arabic human scoring before semantic translation becomes production truth. |
 | X003 layout/readability | `HARNESS_HARDENED / ANDROID_EXECUTED_PARTIAL / HUMAN_PENDING` | Canonical API29/API35 native controls and added Arabic/layout falsifiers are green; actual-size Arabic human readability on a physical target device remains required. |
 | X004 preview/export parity | `ACTIVATED / ANDROID_PARITY_HARDENED / ACCEPTANCE_INCOMPLETE` | Shared raster preview/export remains the single presentation truth and automated boundary/stale-raster/trailing-gap checks are integrated; target physical-device decoded-frame, rotation, cue-switch/preview-lag, and decoded subtitle-export audio parity evidence must still close before PASS. |
-| X005 recovery | **PASS at frozen exact anchor only** | Frozen accepted anchor remains `b7948478eacef67b2552d4540e4358152cf72dd6`; `38030554647` at `550376b...` is compatibility evidence only and does not move the accepted anchor. |
-| X006 performance | `IN_PROGRESS / NOT_ACCEPTED` | W4 has an isolated X006 qualification PR with green API35 staging evidence, but target-device memory/allocation/hash/capture-copy/seek/export qualification is still required and no X006 work is accepted on canonical yet. |
+| X005 recovery | **PASS at frozen exact anchor only** | Frozen accepted anchor remains `b7948478eacef67b2552d4540e4358152cf72dd6`; `38041521968` at `83959720...` is compatibility evidence only and does not move the accepted anchor. |
+| X006 performance | `INTEGRATED / API35_STAGING_QUALIFIED / NOT_ACCEPTED` | Consolidated X006 harnesses are now on canonical and exact-head API35 emulator staging is green. Physical target-device memory/allocation/hash/capture-copy/seek/export qualification is still required before PASS. |
 
 ## Quality boundaries that remain non-negotiable
 
@@ -65,7 +67,7 @@ The canonical merge fixes the protected-range remap after canonical trimming, pr
 ## Required before release
 
 - Close X001 before changing authoritative STT timing interpretation.
-- Close X002 before switching away from the legacy translation comparator.
+- Complete X002 live paired-provider evidence and blind Arabic evaluation before switching away from the legacy translation comparator.
 - Close X003 with actual-size Arabic human readability evidence on the required physical target-device context.
 - Close X004 with target physical-device decoded preview/export/audio/cue-switch/lag/rotation parity evidence.
 - Close X006 with target-device performance qualification.
@@ -73,9 +75,11 @@ The canonical merge fixes the protected-range remap after canonical trimming, pr
 
 ## Current work frontier
 
-W3 / PR #8 is integrated and verified on canonical at implementation anchor `550376b83cf845cedcdf114708632aff1d007134`. X003 and X004 remain acceptance-incomplete only because the explicitly required human/physical-device evidence has not yet been supplied; the automated Android presentation work is no longer isolated worker-only evidence.
+W2 / PR #11, W3 / PR #8, and W4 / PR #9 are integrated on canonical. Current implementation verification anchor is `83959720b14a6a5050c6209756f02d69ab78cba3` with canonical Android CI, X003 API29/API35, and X005 descendant-compatibility checks green.
 
-W1/X001 and W2/X002 remain isolated until their evidence and PRs are reviewed. W4/X006 has produced an isolated performance qualification PR with green staging evidence, but it must be reconciled against the newer canonical lineage and must not be promoted to PASS without target-device evidence.
+W1/X001 is the remaining code/evidence integration frontier. The hosted NVIDIA NVCF HTTP timing contract is still not promoted from another protocol by assumption; the release leader is running a redacted hosted-provider experiment and independent Android presentation-origin verification. X001 remains fail-closed until both sides of that boundary are actually evidenced.
+
+External acceptance still remains for X002 blind Arabic quality, X003 actual-size Arabic readability, X004 physical-device decoded media/lag/audio/rotation parity, and X006 target-device performance. These cannot be replaced by green CI alone.
 
 The release leader remains the only authority for canonical integration, gate-state promotion, final regression, signing, and release artifact production. Do not revive old worker TODOs, model relays, historical branch frontiers, or superseded handoff instructions as current authority.
 
