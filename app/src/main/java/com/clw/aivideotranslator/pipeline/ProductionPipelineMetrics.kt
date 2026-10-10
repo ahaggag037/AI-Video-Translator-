@@ -87,36 +87,52 @@ internal class ProductionPipelineMetricsRecorder(
         }
     }
 
-    @Synchronized fun recordFirstAudioWindow(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(firstAudioWindowElapsedMs = value)
+    @Synchronized fun recordFirstAudioWindow(nowMs: Long) {
+        if (metrics.firstAudioWindowElapsedMs == null) {
+            metrics = metrics.copy(firstAudioWindowElapsedMs = elapsed(nowMs))
+        }
     }
 
-    @Synchronized fun recordFirstSttSent(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(firstSttSentElapsedMs = value)
+    @Synchronized fun recordFirstSttSent(nowMs: Long) {
+        if (metrics.firstSttSentElapsedMs == null) {
+            metrics = metrics.copy(firstSttSentElapsedMs = elapsed(nowMs))
+        }
     }
 
-    @Synchronized fun recordFirstSttReceived(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(firstSttReceivedElapsedMs = value)
+    @Synchronized fun recordFirstSttReceived(nowMs: Long) {
+        if (metrics.firstSttReceivedElapsedMs == null) {
+            metrics = metrics.copy(firstSttReceivedElapsedMs = elapsed(nowMs))
+        }
     }
 
-    @Synchronized fun recordFirstTranslationReceived(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(firstTranslationReceivedElapsedMs = value)
+    @Synchronized fun recordFirstTranslationReceived(nowMs: Long) {
+        if (metrics.firstTranslationReceivedElapsedMs == null) {
+            metrics = metrics.copy(firstTranslationReceivedElapsedMs = elapsed(nowMs))
+        }
     }
 
-    @Synchronized fun recordPreviewReady(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(previewReadyElapsedMs = value)
+    @Synchronized fun recordPreviewReady(nowMs: Long) {
+        if (metrics.previewReadyElapsedMs == null) {
+            metrics = metrics.copy(previewReadyElapsedMs = elapsed(nowMs))
+        }
     }
 
-    @Synchronized fun recordExportStarted(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(exportStartedElapsedMs = value)
+    @Synchronized fun recordExportStarted(nowMs: Long) {
+        if (metrics.exportStartedElapsedMs == null) {
+            metrics = metrics.copy(exportStartedElapsedMs = elapsed(nowMs))
+        }
     }
 
-    @Synchronized fun recordExportCompleted(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(exportCompletedElapsedMs = value)
+    @Synchronized fun recordExportCompleted(nowMs: Long) {
+        if (metrics.exportCompletedElapsedMs == null) {
+            metrics = metrics.copy(exportCompletedElapsedMs = elapsed(nowMs))
+        }
     }
 
-    @Synchronized fun recordExportValidated(nowMs: Long) = recordOnce(nowMs) { value ->
-        metrics = metrics.copy(exportValidatedElapsedMs = value)
+    @Synchronized fun recordExportValidated(nowMs: Long) {
+        if (metrics.exportValidatedElapsedMs == null) {
+            metrics = metrics.copy(exportValidatedElapsedMs = elapsed(nowMs))
+        }
     }
 
     @Synchronized fun observeResourceUsage(
@@ -134,10 +150,6 @@ internal class ProductionPipelineMetricsRecorder(
             peakJavaHeapBytes = max(metrics.peakJavaHeapBytes, javaHeapBytes),
             peakNativeHeapBytes = max(metrics.peakNativeHeapBytes, nativeHeapBytes),
         )
-    }
-
-    private fun recordOnce(nowMs: Long, update: (Long) -> Unit) {
-        update(elapsed(nowMs))
     }
 
     private fun elapsed(nowMs: Long): Long {
