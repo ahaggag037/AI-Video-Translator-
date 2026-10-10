@@ -15,20 +15,25 @@ internal data class FieldTestPreparedSttWindow(
  * Splits one canonical full-source mono PCM16 WAV into deterministic provider windows.
  *
  * The source is decoded once before this layer. Window boundaries are therefore frame-exact and do
- * not depend on MediaExtractor seeking or repeated source reads. This field-test helper never calls
- * the provider and never changes durable session state.
+ * not depend on MediaExtractor seeking or repeated source reads. [sourceEndLimitUs] may clamp codec
+ * padding that decodes beyond the media attachment duration without shifting the original audio PTS.
+ * This field-test helper never calls the provider and never changes durable session state.
  */
 internal object FieldTestPcmWindowSplitter {
     fun split(
         fullProfile: SttAudioProfile,
         outputDir: File,
         windowUs: Long = FieldTestSttWindowPlanner.WINDOW_US,
+        sourceEndLimitUs: Long? = null,
     ): List<FieldTestPreparedSttWindow> {
         require(fullProfile.file.isFile) { "full STT WAV is missing" }
         require(fullProfile.sampleRateHz > 0) { "invalid full STT sample rate" }
         require(fullProfile.channelCount == 1) { "field-test splitter requires mono PCM" }
         require(fullProfile.bitsPerSample == 16) { "field-test splitter requires PCM16" }
         require(windowUs > 0L && windowUs % 1_000L == 0L) { "invalid STT window duration" }
+        sourceEndLimitUs?.let { limit ->
+            require(limit > fullProfile.sourceStartUs) { "source end limit precedes decoded audio" }
+        }
         require(outputDir.mkdirs() || outputDir.isDirectory) { "cannot create STT window directory" }
 
         val source = RandomAccessFile(fullProfile.file, "r")
@@ -50,6 +55,17 @@ internal object FieldTestPcmWindowSplitter {
             )
             require(derivedEndUs == fullProfile.sourceEndUs) { "full STT profile duration does not match WAV frames" }
 
+            val usableFrames = sourceEndLimitUs?.let { limit ->
+                val boundedEndUs = minOf(limit, fullProfile.sourceEndUs)
+                val boundedDurationUs = boundedEndUs - fullProfile.sourceStartUs
+                val boundedFrameNumerator = Math.multiplyExact(
+                    boundedDurationUs,
+                    fullProfile.sampleRateHz.toLong(),
+                )
+                minOf(totalFrames, boundedFrameNumerator / 1_000_000L)
+            } ?: totalFrames
+            require(usableFrames > 0L) { "source timeline contains no usable PCM frames" }
+
             val framesPerWindowNumerator = Math.multiplyExact(windowUs, fullProfile.sampleRateHz.toLong())
             require(framesPerWindowNumerator % 1_000_000L == 0L) {
                 "STT window is not frame-aligned for this sample rate"
@@ -60,8 +76,8 @@ internal object FieldTestPcmWindowSplitter {
             val prepared = mutableListOf<FieldTestPreparedSttWindow>()
             var frameCursor = 0L
             var index = 0
-            while (frameCursor < totalFrames) {
-                val frameEnd = minOf(totalFrames, Math.addExact(frameCursor, maxFrames))
+            while (frameCursor < usableFrames) {
+                val frameEnd = minOf(usableFrames, Math.addExact(frameCursor, maxFrames))
                 val frameCount = frameEnd - frameCursor
                 val windowStartUs = Math.addExact(
                     fullProfile.sourceStartUs,
@@ -71,6 +87,9 @@ internal object FieldTestPcmWindowSplitter {
                     fullProfile.sourceStartUs,
                     Math.multiplyExact(frameEnd, 1_000_000L) / fullProfile.sampleRateHz,
                 )
+                sourceEndLimitUs?.let { limit ->
+                    require(windowEndUs <= limit) { "PCM window exceeds source timeline limit" }
+                }
                 val window = FieldTestSttWindow(index, windowStartUs, windowEndUs)
                 val output = File(outputDir, "stt-window-${index.toString().padStart(3, '0')}.wav")
                 if (output.exists() && !output.delete()) error("cannot replace previous STT window")
@@ -96,7 +115,11 @@ internal object FieldTestPcmWindowSplitter {
 
             require(prepared.isNotEmpty()) { "full STT WAV produced no windows" }
             require(prepared.first().window.startUs == fullProfile.sourceStartUs)
-            require(prepared.last().window.endUs == fullProfile.sourceEndUs)
+            val expectedUsableEndUs = Math.addExact(
+                fullProfile.sourceStartUs,
+                Math.multiplyExact(usableFrames, 1_000_000L) / fullProfile.sampleRateHz,
+            )
+            require(prepared.last().window.endUs == expectedUsableEndUs)
             prepared.zipWithNext().forEach { (left, right) ->
                 require(left.window.endUs == right.window.startUs) { "PCM windows are not contiguous" }
             }
