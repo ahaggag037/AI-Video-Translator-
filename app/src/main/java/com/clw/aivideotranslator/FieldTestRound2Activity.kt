@@ -54,7 +54,6 @@ class FieldTestRound2Activity : ComponentActivity() {
             this,
             FieldTestRound2ViewModel.Factory(
                 context = this,
-                activeSessionOwner = app.activeTranslationSession,
                 store = app.translationSessions,
                 planStore = app.translationRequestPlans,
             ),
@@ -117,7 +116,7 @@ private fun FieldTestRound2App(viewModel: FieldTestRound2ViewModel) {
                         Text("مسار اختبار معزول", fontWeight = FontWeight.Bold)
                         Text(
                             "هذا الـlauncher يشغّل STT للفيديو الكامل بالـwindow journal ثم semantic translation، " +
-                                "ولا يغيّر SourceSnapshot أو planner الخاصين بالمسار القانوني."
+                                "ولا يغيّر SourceSnapshot أو active-session pointer أو planner الخاصين بالمسار القانوني."
                         )
                     }
                 }
@@ -184,7 +183,7 @@ private fun FieldTestRound2App(viewModel: FieldTestRound2ViewModel) {
                 }
 
                 if (state.phase == FieldTestRound2Phase.TRANSLATED) {
-                    val sourceUri = state.sourceUri?.let(Uri::parse)
+                    val sourceUri = state.sourceUri?.let { Uri.parse(it) }
                     val durationMs = metadata?.durationMs
                     when {
                         sourceUri == null -> FieldTestInfoCard(
