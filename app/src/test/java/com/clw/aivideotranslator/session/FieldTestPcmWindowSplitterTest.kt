@@ -75,6 +75,40 @@ class FieldTestPcmWindowSplitterTest {
         }
     }
 
+    @Test fun codecPaddingPastVideoEndIsTrimmedWithoutShiftingAudioOrigin() {
+        val root = Files.createTempDirectory("pcm-padding-test").toFile()
+        try {
+            val source = File(root, "full.wav")
+            val sampleRate = 1_000
+            val pcm = ByteArray(61_500 * 2) { index -> (index % 199).toByte() }
+            writeCanonicalWav(source, sampleRate, pcm)
+            val full = SttAudioProfile(
+                file = source,
+                sampleRateHz = sampleRate,
+                channelCount = 1,
+                bitsPerSample = 16,
+                sourceStartUs = 250_000L,
+                sourceEndUs = 61_750_000L,
+                durationMs = 61_500L,
+            )
+
+            val windows = FieldTestPcmWindowSplitter.split(
+                fullProfile = full,
+                outputDir = File(root, "windows"),
+                sourceEndLimitUs = 61_250_000L,
+            )
+
+            assertEquals(2, windows.size)
+            assertEquals(250_000L, windows.first().window.startUs)
+            assertEquals(61_250_000L, windows.last().window.endUs)
+            assertEquals(listOf(60_000L, 1_000L), windows.map { it.profile.durationMs })
+            val joined = windows.flatMap { it.profile.file.readBytes().drop(44) }.toByteArray()
+            assertArrayEquals(pcm.copyOf(61_000 * 2), joined)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun rejectsProfileWhoseTimelineDoesNotMatchPcmFrames() {
         val root = Files.createTempDirectory("pcm-invalid-test").toFile()
