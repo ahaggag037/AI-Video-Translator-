@@ -15,8 +15,9 @@ internal data class FieldTestFullAudioPreparation(
  * Non-canonical round-2 preparation path.
  *
  * The currently bound content URI is verified against the immutable attachment fingerprint before
- * and after the one full audio decode. The decoded PCM is then split frame-exactly, so later STT
- * transport never seeks the compressed source independently per window.
+ * and after the one full audio decode. Decoder output may contain normal codec padding beyond the
+ * container duration, so only frame-exact PCM that lies inside the attachment timeline is exposed
+ * as provider windows. The original non-zero audio presentation origin is preserved.
  */
 internal object FieldTestFullAudioWindowPreparation {
     fun prepare(
@@ -38,15 +39,28 @@ internal object FieldTestFullAudioWindowPreparation {
             sourceUri = Uri.parse(attachment.contentUri),
             durationUs = attachment.durationUs,
         ).getOrThrow()
-        require(fullProfile.sourceStartUs >= 0L && fullProfile.sourceEndUs <= attachment.durationUs) {
-            "decoded full audio lies outside the source attachment"
+        require(fullProfile.sourceStartUs >= 0L && fullProfile.sourceStartUs < attachment.durationUs) {
+            "decoded full audio starts outside the source attachment"
+        }
+        require(fullProfile.sourceEndUs > fullProfile.sourceStartUs) {
+            "decoded full audio has no positive presentation interval"
         }
 
         val after = SourceContentProbe.inspect(context.contentResolver, attachment.contentUri)
         requireCurrentSource(after, attachment, "after full audio decode")
         require(before.fingerprint == after.fingerprint) { "source changed while full audio was decoded" }
 
-        val windows = FieldTestPcmWindowSplitter.split(fullProfile, outputDir)
+        val windows = FieldTestPcmWindowSplitter.split(
+            fullProfile = fullProfile,
+            outputDir = outputDir,
+            sourceEndLimitUs = attachment.durationUs,
+        )
+        require(windows.first().window.startUs == fullProfile.sourceStartUs) {
+            "prepared STT windows shifted the decoded audio origin"
+        }
+        require(windows.last().window.endUs <= attachment.durationUs) {
+            "prepared STT windows exceed the source attachment"
+        }
         FieldTestFullAudioPreparation(fullProfile, windows)
     }
 
