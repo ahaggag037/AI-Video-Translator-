@@ -5,8 +5,14 @@ data class VideoMetadata(
     val durationMs: Long?,
     val width: Int?,
     val height: Int?,
-    val sizeBytes: Long?
+    val sizeBytes: Long?,
+    val rotationDegrees: Int = 0,
+    val hasAudio: Boolean = false,
 ) {
+    init {
+        require(rotationDegrees in setOf(0, 90, 180, 270)) { "unsupported video rotation" }
+    }
+
     val durationLabel: String
         get() = durationMs?.let(::formatDuration) ?: "غير معروف"
 
