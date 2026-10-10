@@ -158,6 +158,22 @@ private fun FieldTestRound2App(viewModel: FieldTestRound2ViewModel) {
                     Text(if (state.phase == FieldTestRound2Phase.STT_RUNNING) "جارٍ STT…" else "تشغيل STT — الفيديو الكامل")
                 }
 
+                if (state.phase == FieldTestRound2Phase.STT_UNKNOWN_REMOTE_OUTCOME && state.sourceUri != null) {
+                    FieldTestInfoCard(
+                        "قرار استرداد مطلوب",
+                        "الطلب السابق وصل إلى SENT ثم فقدنا نتيجة المزود. لن يعيد التطبيق إرساله تلقائيًا. " +
+                            "يمكنك بدء جلسة جديدة لنفس الفيديو بقرار صريح؛ قد يسبب ذلك طلبًا إضافيًا إذا كان الطلب السابق قد نجح لدى المزود. " +
+                            "سجل SENT القديم يبقى محفوظًا ولا يتم حذفه أو استبداله.",
+                    )
+                    Button(
+                        onClick = { viewModel.selectSource(requireNotNull(state.sourceUri)) },
+                        enabled = !state.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("بدء جلسة جديدة لنفس الفيديو — إعادة إرسال صريحة")
+                    }
+                }
+
                 state.sttResult?.let { result ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
