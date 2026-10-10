@@ -2,9 +2,11 @@ package com.clw.aivideotranslator.subtitle.android
 
 import android.content.Context
 import android.icu.util.VersionInfo
+import android.net.Uri
 import android.os.Build
 import com.clw.aivideotranslator.ArabicSubtitleCue
 import com.clw.aivideotranslator.VideoMetadata
+import com.clw.aivideotranslator.VideoProbe
 import com.clw.aivideotranslator.media.FrameGeometryResolver
 
 /**
@@ -16,14 +18,32 @@ import com.clw.aivideotranslator.media.FrameGeometryResolver
 data class LivePresentationRasterSnapshot(
     val geometry: FrameGeometry,
     val timeline: SnapshotRasterTimeline,
+    val sourceHasAudio: Boolean,
 )
 
 object LivePresentationRasterSnapshotFactory {
     fun build(
         context: Context,
+        sourceUri: Uri,
+        cues: List<ArabicSubtitleCue>,
+    ): Result<LivePresentationRasterSnapshot> = runCatching {
+        val metadata = VideoProbe.read(context.applicationContext, sourceUri).getOrThrow()
+        buildFromMetadata(context, metadata, cues)
+    }
+
+    fun build(
+        context: Context,
         metadata: VideoMetadata,
         cues: List<ArabicSubtitleCue>,
     ): Result<LivePresentationRasterSnapshot> = runCatching {
+        buildFromMetadata(context, metadata, cues)
+    }
+
+    private fun buildFromMetadata(
+        context: Context,
+        metadata: VideoMetadata,
+        cues: List<ArabicSubtitleCue>,
+    ): LivePresentationRasterSnapshot {
         require(cues.isNotEmpty()) { "no presentation cues for raster snapshot" }
         val encodedWidth = requireNotNull(metadata.width) { "video width is unavailable" }
         val encodedHeight = requireNotNull(metadata.height) { "video height is unavailable" }
@@ -70,9 +90,10 @@ object LivePresentationRasterSnapshotFactory {
             )
         }
 
-        LivePresentationRasterSnapshot(
+        return LivePresentationRasterSnapshot(
             geometry = geometry,
             timeline = SnapshotRasterTimeline(rasterCues),
+            sourceHasAudio = metadata.hasAudio,
         )
     }
 }
