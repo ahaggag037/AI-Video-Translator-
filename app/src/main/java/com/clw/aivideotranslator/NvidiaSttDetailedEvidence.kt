@@ -1,13 +1,13 @@
 package com.clw.aivideotranslator
 
-/** Versioned identity of the currently accepted legacy STT parser/normalizer semantics. */
+/** Versioned identity of the fail-closed STT parser semantics used by durable transport. */
 internal object NvidiaSttParserContract {
-    const val ID = "nvidia-stt-legacy-parser-v1"
+    const val ID = "nvidia-stt-unverified-timing-parser-v2"
 }
 
 /**
- * Diagnostic/durability bridge only. The accepted parser result remains exactly NvidiaSttClient's
- * current legacy output; timing evidence is captured beside it without selecting a schema or unit.
+ * Diagnostic/durability bridge only. Accepted text/confidence follows the production fail-closed
+ * parser; raw timing evidence is captured beside it without selecting a schema, unit, or origin.
  * NOTE: NvidiaSttDetailedParse nests NvidiaSttTimingEvidence.rawResponseUtf8 (the verbatim provider
  * body). It is X001-diagnostic-only and must never flow into durable/persisted/relayed structures.
  */
@@ -19,9 +19,9 @@ internal data class NvidiaSttDetailedParse(
 
 internal object NvidiaSttDetailedEvidenceParser {
     fun parse(body: String, httpStatus: Int = 200): NvidiaSttDetailedParse {
-        // Parse accepted semantics first. Evidence must never rescue or reinterpret a response that
-        // the production parser rejects.
-        val result = NvidiaSttClient.parseResponse(body, httpStatus)
+        // Parse accepted text semantics first. Evidence must never rescue or reinterpret a response
+        // that the production parser rejects, and raw offsets remain uninterpreted until X001 proof.
+        val result = NvidiaSttClient.parseResponseWithoutTimingAuthority(body, httpStatus)
         val evidence = NvidiaSttTimingEvidenceInspector.inspect(body)
         return NvidiaSttDetailedParse(result, evidence, NvidiaSttParserContract.ID)
     }

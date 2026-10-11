@@ -7,6 +7,7 @@ import okhttp3.MultipartBody
 import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,22 +37,32 @@ class NvidiaSttTransportObservationTest {
         }
     }
 
-    @Test fun successfulResponseBindsProfileResultParserDigestsAndStatus() {
+    @Test fun successfulResponseBindsProfileTextParserDigestsAndStatusWithoutTimingAuthority() {
         val observation = NvidiaSttClient.bindDetailedResponse(responseBody, 200, sampleDigest())
         assertEquals(NvidiaSttWireContract.PROFILE, observation.requestProfile)
         assertEquals("Hello world.", observation.result.transcript)
         assertEquals(listOf("Hello", "world."), observation.result.words.map { it.text })
+        assertTrue(observation.result.words.all { it.startMs == null && it.endMs == null })
         assertEquals(NvidiaSttParserContract.ID, observation.parserVersion)
         assertEquals(utf8Sha(responseBody), observation.rawResponseSha256)
         assertEquals(sampleDigest(), observation.sampleSha256)
         assertEquals(200, observation.httpStatus)
     }
 
+    @Test fun ambiguousMagnitudeNeverEscapesTheProductionResponseBoundary() {
+        listOf(
+            """{"text":"x","words":[{"word":"x","start_time":0.02,"end_time":0.08}]}""",
+            """{"text":"x","words":[{"word":"x","start_time":20,"end_time":80}]}""",
+            """{"text":"x","words":[{"word":"x","start_time":200,"end_time":800}]}""",
+        ).forEach { body ->
+            val observation = NvidiaSttClient.bindDetailedResponse(body, 200, sampleDigest())
+            val word = observation.result.words.single()
+            assertNull(word.startMs)
+            assertNull(word.endMs)
+        }
+    }
+
     @Test fun observationGraphIsStructurallyRedacted() {
-        // The durable provenance type must not expose the verbatim body, the timing-evidence graph
-        // that nests it, or the old combined detailed-parse shape.
-        // Compiler/plugin static metadata (for example Compose's $stable) is not part of an
-        // observation instance. Keep the exact allowlist for every instance field.
         val fieldNames = NvidiaSttTransportObservation::class.java.declaredFields
             .filterNot { Modifier.isStatic(it.modifiers) }
             .map { it.name }
@@ -72,7 +83,6 @@ class NvidiaSttTransportObservationTest {
             assertEquals("NVIDIA HTTP $code: throttled", error.message)
         }
 
-        // Non-JSON error bodies fall back to the truncated raw body exactly like the legacy handler.
         val fallback = expectFailure {
             NvidiaSttClient.bindDetailedResponse("<html>bad gateway</html>", 502, sampleDigest())
         }
@@ -93,7 +103,7 @@ class NvidiaSttTransportObservationTest {
     }
 
     @Test fun observationRejectsMalformedDigestsAndParserIdentity() {
-        val result = NvidiaSttClient.parseResponse(responseBody, 200)
+        val result = NvidiaSttClient.parseResponseWithoutTimingAuthority(responseBody, 200)
         val goodRaw = utf8Sha(responseBody)
         val goodSample = sampleDigest()
         expectFailure {
@@ -113,7 +123,6 @@ class NvidiaSttTransportObservationTest {
                 NvidiaSttWireContract.PROFILE, result, NvidiaSttParserContract.ID, goodRaw, "e".repeat(63),
             )
         }
-        // Positive control: the well-formed observation constructs.
         NvidiaSttTransportObservation(
             NvidiaSttWireContract.PROFILE, result, NvidiaSttParserContract.ID, goodRaw, goodSample,
         )
@@ -127,4 +136,3 @@ class NvidiaSttTransportObservationTest {
         return buffer.readUtf8().replace(boundary, "<BOUNDARY>")
     }
 }
-

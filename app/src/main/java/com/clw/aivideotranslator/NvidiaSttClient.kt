@@ -48,19 +48,19 @@ object NvidiaSttClient {
                 }.getOrDefault(body.take(300))
                 error("NVIDIA HTTP ${response.code}: ${detail.ifBlank { "فشل الطلب" }}")
             }
-            parseResponse(body, response.code)
+            // X001: hosted offsets are preserved only as diagnostic raw evidence until unit+origin
+            // are proven. Production transport must never infer a timing unit from scalar magnitude.
+            parseResponseWithoutTimingAuthority(body, response.code)
         }
     }
 
     /**
      * Additive transport boundary for durable-session evidence plumbing. The exact sample bytes are
      * materialized in memory and hashed BEFORE the request exists, the request streams exactly those
-     * bytes, and the redacted observation (accepted result + parser identity + UTF-8 text digest of
-     * the response + pre-send sample digest) is bound at the single response-handling point. The
-     * verbatim response body never enters the observation graph. Non-2xx handling is byte-identical
-     * in classification/message to the legacy path and never produces an observation. Legacy
-     * transcribeEnglishSample semantics/request/failure behavior are unchanged.
-     * Module-internal: the durable evidence plumbing intentionally never crosses the module boundary.
+     * bytes, and the redacted observation (accepted text/confidence + parser identity + UTF-8 text
+     * digest of the response + pre-send sample digest) is bound at the single response-handling
+     * point. Raw provider offsets are deliberately not interpreted here while X001 is unverified.
+     * The verbatim response body never enters the durable observation graph.
      */
     internal fun transcribeEnglishSampleDetailed(
         apiKey: String,
@@ -85,7 +85,7 @@ object NvidiaSttClient {
     /**
      * Single response-handling point for the durable STT path. Separated from the network call so
      * the failure/binding contract is unit-testable without a provider. Failure semantics mirror
-     * the legacy handler exactly; a non-2xx status yields an exception, never an observation.
+     * the legacy handler; a non-2xx status yields an exception, never an observation.
      */
     internal fun bindDetailedResponse(
         body: String,
@@ -100,7 +100,7 @@ object NvidiaSttClient {
         }
         return NvidiaSttTransportObservation(
             requestProfile = NvidiaSttWireContract.PROFILE,
-            result = parseResponse(body, httpStatus),
+            result = parseResponseWithoutTimingAuthority(body, httpStatus),
             parserVersion = NvidiaSttParserContract.ID,
             rawResponseSha256 = NvidiaSttTimingEvidenceInspector.inspect(body).rawResponseSha256,
             sampleSha256 = sampleSha256,
@@ -111,7 +111,42 @@ object NvidiaSttClient {
         .digest(bytes)
         .joinToString("") { "%02x".format(it) }
 
+    /**
+     * Historical P0 comparator parser used only by synthetic regression fixtures. It intentionally
+     * retains the pre-X001 magnitude heuristic so tests can demonstrate the legacy ambiguity. Never
+     * call this from provider transport, durable adoption, preview, or export code.
+     */
     internal fun parseResponse(body: String, httpStatus: Int = 200): NvidiaSttResult {
+        val parsed = parseWireResponse(body)
+        return NvidiaSttResult(
+            transcript = parsed.transcript,
+            words = normalizeLegacyTimes(parsed.words),
+            httpStatus = httpStatus,
+        )
+    }
+
+    /**
+     * Production-safe parse while X001 is open: preserve accepted text/confidence, but expose no
+     * interpreted offset at all. Raw timing fields remain available only through
+     * [NvidiaSttTimingEvidenceInspector] for evidence capture and explicit mapping.
+     */
+    internal fun parseResponseWithoutTimingAuthority(body: String, httpStatus: Int = 200): NvidiaSttResult {
+        val parsed = parseWireResponse(body)
+        return NvidiaSttResult(
+            transcript = parsed.transcript,
+            words = parsed.words.map { raw ->
+                NvidiaWord(
+                    text = raw.text,
+                    startMs = null,
+                    endMs = null,
+                    confidence = raw.confidence,
+                )
+            },
+            httpStatus = httpStatus,
+        )
+    }
+
+    private fun parseWireResponse(body: String): ParsedWireResponse {
         val root = JSONObject(body)
         val words = mutableListOf<RawWord>()
         val transcriptParts = mutableListOf<String>()
@@ -142,13 +177,7 @@ object NvidiaSttClient {
             .replace(Regex("\\s+"), " ")
             .trim()
         require(transcript.isNotBlank()) { "استجابة NVIDIA لا تحتوي نص تفريغ معروف البنية" }
-
-        val normalizedWords = normalizeTimes(words)
-        return NvidiaSttResult(
-            transcript = transcript,
-            words = normalizedWords,
-            httpStatus = httpStatus,
-        )
+        return ParsedWireResponse(transcript, words)
     }
 
     private fun readWords(array: JSONArray?, target: MutableList<RawWord>) {
@@ -170,12 +199,9 @@ object NvidiaSttClient {
         }
     }
 
-    private fun normalizeTimes(raw: List<RawWord>): List<NvidiaWord> {
+    private fun normalizeLegacyTimes(raw: List<RawWord>): List<NvidiaWord> {
         if (raw.isEmpty()) return emptyList()
         val maxObserved = raw.mapNotNull { it.end ?: it.start }.maxOrNull() ?: 0.0
-        // Riva's ASR protobuf describes word offsets in milliseconds. Some HTTP/realtime
-        // representations use seconds, so keep a small compatibility guard for values
-        // that are clearly second-scale for a one-minute prototype sample.
         val valuesAreSeconds = maxObserved in 0.0..120.0
 
         fun toMs(value: Double?): Long? = value?.let {
@@ -200,6 +226,11 @@ object NvidiaSttClient {
             else -> null
         }
     }
+
+    private data class ParsedWireResponse(
+        val transcript: String,
+        val words: List<RawWord>,
+    )
 
     private data class RawWord(
         val text: String,
