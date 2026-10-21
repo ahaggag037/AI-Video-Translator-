@@ -47,7 +47,7 @@ object SubtitlePipeline {
         fun flush() {
             if (pending.isEmpty()) return
             result += SourceUnit(
-                id = String.format(Locale.ROOT, "u%06d", result.size + 1),
+                id = String.format(Locale.ROOT, "u%04d", result.size + 1),
                 startMs = pending.first().startMs!!,
                 endMs = pending.last().endMs!!,
                 sourceText = pending.joinToString(" ") { it.text.trim() },
