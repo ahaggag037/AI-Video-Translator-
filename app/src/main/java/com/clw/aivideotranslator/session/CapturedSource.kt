@@ -46,6 +46,23 @@ internal class CapturedSource(
         ).getOrThrow()
     }
 
+    /**
+     * A video timeline may outlive its audio track or contain a >60s audio gap. That is not an STT
+     * transport failure and must not create a provider request. The preparer owns the exact internal
+     * no-sample diagnostic; every other decoder/media failure remains fatal and fail-closed.
+     */
+    @Synchronized fun prepareWindowOrNull(window: SttWindow): DetailedSttAudioPreparation? {
+        return try {
+            prepareWindow(window)
+        } catch (error: IllegalArgumentException) {
+            releasePreparedWindow()
+            if (error.message == NO_AUDIO_WINDOW_MESSAGE) null else throw error
+        } catch (error: Throwable) {
+            releasePreparedWindow()
+            throw error
+        }
+    }
+
     /** Release a completed/rejected window before preparing the next one. */
     @Synchronized fun releasePreparedWindow() {
         val file = preparedFile ?: return
@@ -60,5 +77,9 @@ internal class CapturedSource(
             if (file.exists() && !file.delete()) file.deleteOnExit()
         }
         preparedFile = null
+    }
+
+    private companion object {
+        const val NO_AUDIO_WINDOW_MESSAGE = "STT window contains no audio sample"
     }
 }
