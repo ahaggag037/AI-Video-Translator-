@@ -13,11 +13,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.clw.aivideotranslator.VideoMetadata
 import com.clw.aivideotranslator.VideoProbe
 import com.clw.aivideotranslator.credential.AndroidAiCredentialStore
 import com.clw.aivideotranslator.credential.CredentialStatus
 import com.clw.aivideotranslator.credential.StoredCredential
 import com.clw.aivideotranslator.editor.DisplayTimingStateStore
+import com.clw.aivideotranslator.editor.DurableDisplayTimingState
 import com.clw.aivideotranslator.editor.EditorTextStateStore
 import com.clw.aivideotranslator.editor.UnitEditorTextState
 import com.clw.aivideotranslator.session.DurableSourcePhase
@@ -30,6 +32,9 @@ import com.clw.aivideotranslator.ui.ai.AiCredentialStatus
 import com.clw.aivideotranslator.ui.editor.EditorCueNavigator
 import com.clw.aivideotranslator.ui.editor.EditorTextPresentation
 import com.clw.aivideotranslator.ui.editor.LegacyEditorTextProjection
+import com.clw.aivideotranslator.ui.editor.TimingEditorPresentation
+import com.clw.aivideotranslator.ui.editor.TimingEditorProjection
+import com.clw.aivideotranslator.ui.editor.TimingRuntimeResolver
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentation
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentationResolver
 import com.clw.aivideotranslator.ui.processing.ProcessingResolution
@@ -38,6 +43,8 @@ import com.clw.aivideotranslator.ui.source.SourceReviewPresentation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val TIMING_NUDGE_US = 100_000L
 
 /**
  * Product-first Activity host for Path A. Durable ViewModels/stores stay authoritative. Navigation
@@ -59,10 +66,6 @@ internal fun ProductAppHost(
     val durableTranslation by sessionViewModel.translation.collectAsState()
     val candidate by sourceSelectionViewModel.snapshot.collectAsState()
 
-    // Keep the store injected at the product boundary even before the timing surface starts
-    // consuming it below; it is part of the same durable session root, never UI-owned state.
-    remember(displayTimingStore) { displayTimingStore }
-
     val navigator = remember { ProductNavigator() }
     val cueNavigator = remember { EditorCueNavigator() }
     var route by remember { mutableStateOf(navigator.route) }
@@ -71,6 +74,8 @@ internal fun ProductAppHost(
     var providerRecoveryAttempt by remember { mutableStateOf<ProviderRecoveryFreshAttempt?>(null) }
     var recoveryAfterCredentialSetup by remember { mutableStateOf(false) }
     var editorUnitState by remember { mutableStateOf(UnitEditorTextState()) }
+    var displayTimingState by remember { mutableStateOf<DurableDisplayTimingState?>(null) }
+    var activeVideoMetadata by remember { mutableStateOf<VideoMetadata?>(null) }
     var cueSelection by remember { mutableStateOf(cueNavigator.reconcile(emptyList())) }
 
     val providerApiKey = credentialRecord
@@ -88,6 +93,22 @@ internal fun ProductAppHost(
             runCatching { credentialStore.read() }.getOrNull()
         }
         credentialLoaded = true
+    }
+
+    LaunchedEffect(durableSource.phase, durableSource.contentUri) {
+        val contentUri = durableSource.contentUri
+        activeVideoMetadata = if (
+            durableSource.phase == DurableSourcePhase.BOUND &&
+            !contentUri.isNullOrBlank()
+        ) {
+            withContext(Dispatchers.IO) {
+                runCatching { Uri.parse(contentUri) }
+                    .getOrNull()
+                    ?.let { uri -> VideoProbe.read(context, uri).getOrNull() }
+            }
+        } else {
+            null
+        }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -216,6 +237,14 @@ internal fun ProductAppHost(
         }
     }
 
+    LaunchedEffect(activeSessionId) {
+        displayTimingState = activeSessionId?.let { sessionId ->
+            withContext(Dispatchers.IO) {
+                runCatching { displayTimingStore.read(sessionId) }.getOrNull()
+            }
+        }
+    }
+
     val editorPresentation = if (activeEntry != null) {
         LegacyEditorTextProjection.resolve(
             sourceUnit = activeUnit,
@@ -240,6 +269,27 @@ internal fun ProductAppHost(
             styleEnabled = false,
             srtExportEnabled = false,
             mp4ExportEnabled = false,
+        )
+    }
+
+    val timingRuntime = cueSelection.unitId?.let { selectedUnitId ->
+        TimingRuntimeResolver.resolve(
+            units = durableTranslation.liveUnits.orEmpty(),
+            selectedUnitId = selectedUnitId,
+            states = displayTimingState?.units.orEmpty(),
+        )
+    }
+    val videoDurationUs = activeVideoMetadata?.durationMs?.let { durationMs ->
+        runCatching { Math.multiplyExact(durationMs, 1_000L) }.getOrNull()
+    }
+    val timingEditorPresentation: TimingEditorPresentation? = timingRuntime?.let { runtime ->
+        TimingEditorProjection.resolve(
+            sourceInterval = runtime.sourceInterval,
+            state = runtime.selectedState,
+            videoDurationUs = videoDurationUs,
+            previousEffectiveEndUs = runtime.previousEffectiveEndUs,
+            nextEffectiveStartUs = runtime.nextEffectiveStartUs,
+            sourceAvailable = durableSource.phase == DurableSourcePhase.BOUND,
         )
     }
 
@@ -287,6 +337,42 @@ internal fun ProductAppHost(
         scope.launch {
             transform()?.let { editorUnitState = it }
         }
+    }
+
+    fun mutateTimingState(transform: suspend () -> DurableDisplayTimingState?) {
+        scope.launch {
+            transform()?.let { displayTimingState = it }
+        }
+    }
+
+    fun setTimingFields(startText: String, endText: String) {
+        val sessionId = activeSessionId ?: return
+        val unitId = activeEntry?.sourceUnitId ?: return
+        mutateTimingState {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    displayTimingStore.setPendingFieldDraft(
+                        sessionId = sessionId,
+                        unitId = unitId,
+                        startText = startText,
+                        endText = endText,
+                    )
+                }.getOrNull()
+            }
+        }
+    }
+
+    fun nudgeTiming(startDeltaUs: Long = 0L, endDeltaUs: Long = 0L) {
+        val presentation = timingEditorPresentation ?: return
+        val currentStart = TimingEditorProjection.parseTimecodeUs(presentation.startField) ?: return
+        val currentEnd = TimingEditorProjection.parseTimecodeUs(presentation.endField) ?: return
+        val nextStart = runCatching { Math.addExact(currentStart, startDeltaUs) }.getOrNull() ?: return
+        val nextEnd = runCatching { Math.addExact(currentEnd, endDeltaUs) }.getOrNull() ?: return
+        if (nextStart < 0L || nextEnd < 0L) return
+        setTimingFields(
+            startText = TimingEditorProjection.formatTimecodeUs(nextStart),
+            endText = TimingEditorProjection.formatTimecodeUs(nextEnd),
+        )
     }
 
     fun startFreshProviderRecovery(attempt: ProviderRecoveryFreshAttempt) {
@@ -452,6 +538,57 @@ internal fun ProductAppHost(
         onOpenStyleEditor = { navigate(ProductNavigationEvent.OpenStyleStudio) },
         onOpenFullscreenPreview = { navigate(ProductNavigationEvent.OpenFullscreenPreview) },
         onOpenExport = { navigate(ProductNavigationEvent.OpenExportCenter) },
+        timingEditorPresentation = timingEditorPresentation,
+        onTimingStartChange = { startText ->
+            val endText = timingEditorPresentation?.endField ?: return@AppRoot
+            setTimingFields(startText, endText)
+        },
+        onTimingEndChange = { endText ->
+            val startText = timingEditorPresentation?.startField ?: return@AppRoot
+            setTimingFields(startText, endText)
+        },
+        onNudgeStartBackward = { nudgeTiming(startDeltaUs = -TIMING_NUDGE_US) },
+        onNudgeStartForward = { nudgeTiming(startDeltaUs = TIMING_NUDGE_US) },
+        onNudgeEndBackward = { nudgeTiming(endDeltaUs = -TIMING_NUDGE_US) },
+        onNudgeEndForward = { nudgeTiming(endDeltaUs = TIMING_NUDGE_US) },
+        onResetTimingToSource = {
+            val sessionId = activeSessionId
+            val unitId = activeEntry?.sourceUnitId
+            if (sessionId != null && unitId != null) {
+                mutateTimingState {
+                    withContext(Dispatchers.IO) {
+                        runCatching { displayTimingStore.resetToSource(sessionId, unitId) }.getOrNull()
+                    }
+                }
+            }
+        },
+        onCommitTiming = {
+            val sessionId = activeSessionId
+            val unitId = activeEntry?.sourceUnitId
+            val runtime = timingRuntime
+            val presentation = timingEditorPresentation
+            if (
+                sessionId != null &&
+                unitId != null &&
+                runtime != null &&
+                presentation?.validation?.isValid == true
+            ) {
+                mutateTimingState {
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            displayTimingStore.commitPendingFieldDraft(
+                                sessionId = sessionId,
+                                unitId = unitId,
+                                sourceInterval = runtime.sourceInterval,
+                                videoDurationUs = videoDurationUs,
+                                previousEffectiveEndUs = runtime.previousEffectiveEndUs,
+                                nextEffectiveStartUs = runtime.nextEffectiveStartUs,
+                            )
+                        }.getOrNull()
+                    }
+                }
+            }
+        },
         onBackFromSettings = { navigate(ProductNavigationEvent.BackHomeFromSecondary) },
         onOpenDiagnostics = { navigate(ProductNavigationEvent.OpenDiagnostics) },
         onBackFromDiagnostics = { navigate(ProductNavigationEvent.BackHomeFromSecondary) },
