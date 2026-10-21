@@ -1,6 +1,7 @@
 package com.clw.aivideotranslator
 
 import android.app.Application
+import com.clw.aivideotranslator.credential.AndroidAiCredentialStore
 import com.clw.aivideotranslator.editor.DisplayTimingStateStore
 import com.clw.aivideotranslator.editor.EditorTextStateStore
 import com.clw.aivideotranslator.session.ActiveSessionRegistry
@@ -50,6 +51,10 @@ class AiVideoTranslatorApplication : Application() {
             sessionsRoot = translationSessionRoot,
             validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
         )
+    }
+
+    internal val aiCredentialStore: AndroidAiCredentialStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        AndroidAiCredentialStore(this)
     }
 
     /** Explicit controller/UI opt-in; never binds old in-memory/manual work to new media. */
