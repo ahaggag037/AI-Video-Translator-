@@ -15,8 +15,6 @@ class LegacyEditorTextProjectionTest {
         startMs = 1000L,
         endMs = 2500L,
         sourceText = "hello",
-        wordStartIndex = 0,
-        wordEndIndexExclusive = 1,
     )
     private val machine = TranslationEntry("u1", "مرحبا")
 
