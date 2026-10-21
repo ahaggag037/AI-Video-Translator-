@@ -15,7 +15,11 @@ internal object LegacyEditorTextProjection {
         editorState: UnitEditorTextState,
         sourceAvailable: Boolean,
         reviewRequired: Boolean = false,
+        cueIndex: Int = 0,
+        cueCount: Int = 1,
     ): EditorTextPresentation {
+        require(cueCount >= 1)
+        require(cueIndex in 0 until cueCount)
         val committedExportText = editorState.exportText(machineEntry.translatedText)
         return EditorTextPresentation(
             sourceText = sourceUnit?.sourceText.orEmpty(),
@@ -31,6 +35,9 @@ internal object LegacyEditorTextProjection {
             srtExportEnabled = committedExportText.isNotBlank(),
             mp4ExportEnabled = sourceAvailable && committedExportText.isNotBlank(),
             hasProviderAction = false,
+            cuePositionLabel = "${cueIndex + 1} / $cueCount",
+            canPreviousCue = cueIndex > 0,
+            canNextCue = cueIndex + 1 < cueCount,
         )
     }
 }
