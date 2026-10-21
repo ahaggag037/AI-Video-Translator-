@@ -1,5 +1,6 @@
 package com.clw.aivideotranslator.app
 
+import com.clw.aivideotranslator.TranslationEntry
 import com.clw.aivideotranslator.app.resume.ReopenResolver
 import com.clw.aivideotranslator.session.DurableSourceFailure
 import com.clw.aivideotranslator.session.DurableSourcePhase
@@ -61,7 +62,7 @@ class ProductRuntimeFactsResolverTest {
             translation = DurableTranslationUiState(
                 phase = DurableTranslationPhase.RECOVERED_TEXT_ONLY,
                 sessionId = "s1",
-                entries = listOf(TestTranslationEntryFactory.entry()),
+                entries = listOf(TranslationEntry("u1", "ترجمة محفوظة")),
             ),
             credentialUsable = true,
         )
