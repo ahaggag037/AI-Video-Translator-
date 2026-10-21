@@ -85,13 +85,13 @@ class ProductRuntimeFactsResolverTest {
         assertEquals(ProductRoute.AI_SETUP, ReopenProductRouteAdapter.toProductRoute(ReopenResolver.resolve(facts.reopenFacts)))
     }
 
-    @Test fun activeLocalCaptureProjectsProcessingWithoutProviderSubmissionClaim() {
+    @Test fun activeDurableProcessingProjectsProcessingWithoutUnknownOutcomeClaim() {
         val facts = ProductRuntimeFactsResolver.resolve(
-            source = DurableSourceUiState(
-                phase = DurableSourcePhase.CAPTURING,
-                contentUri = "content://video/candidate",
+            source = boundSource,
+            stt = DurableSttUiState(
+                phase = DurableSttPhase.RUNNING,
+                sessionId = "s1",
             ),
-            stt = DurableSttUiState.idle(),
             translation = DurableTranslationUiState.idle(),
             credentialUsable = true,
         )
@@ -99,5 +99,6 @@ class ProductRuntimeFactsResolverTest {
         assertEquals(HomeStatus.ActiveProcessing, facts.homeStatus)
         assertTrue(facts.reopenFacts.hasLocalProcessingToResume)
         assertFalse(facts.reopenFacts.hasUnknownProviderOutcome)
+        assertEquals(ProductRoute.PROCESSING, ReopenProductRouteAdapter.toProductRoute(ReopenResolver.resolve(facts.reopenFacts)))
     }
 }
