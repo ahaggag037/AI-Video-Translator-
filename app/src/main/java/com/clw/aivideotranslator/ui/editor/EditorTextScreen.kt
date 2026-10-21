@@ -1,8 +1,6 @@
 package com.clw.aivideotranslator.ui.editor
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,7 +23,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -91,33 +88,21 @@ internal fun EditorTextScreen(
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text = "يمكنك مراجعة النص وتعديله وتصدير SRT. التشغيل والتوقيت والنمط والفيديو المدمج متوقفة حتى إعادة ربط المصدر.",
+                                text = "يمكنك مراجعة النص وتعديله وتصدير SRT. التشغيل والتوقيت والنمط والفيديو المدمج متوقفة حتى اختيار فيديو جديد.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp)
-                            .background(Color.Black),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "معاينة الفيديو",
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
+                }
 
-                    OutlinedButton(
-                        onClick = onPlayPause,
-                        enabled = presentation.playbackEnabled,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("تشغيل / إيقاف")
+                presentation.actionError?.takeIf { it.isNotBlank() }?.let { message ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = message,
+                            modifier = Modifier.padding(16.dp),
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                 }
 
