@@ -93,4 +93,15 @@ class CandidateSourceCoordinatorTest {
             coordinator.state,
         )
     }
+
+    @Test fun dismissingCandidateInvalidatesOutstandingWorkAndReturnsIdle() {
+        val coordinator = CandidateSourceCoordinator()
+        val ticket = coordinator.beginProbe("content://video/a")
+
+        coordinator.clearCandidate()
+
+        assertEquals(CandidateSourceState.Idle, coordinator.state)
+        assertFalse(coordinator.completeProbe(ticket, CandidateProbeResult.Ready("a.mp4")))
+        assertFalse(coordinator.activationSucceeded(ticket))
+    }
 }
