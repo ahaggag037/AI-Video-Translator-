@@ -9,13 +9,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EditorTextStateStoreTest {
+    private fun createStoreRoot(): File = Files.createTempDirectory("editor-text-store").toFile().also { root ->
+        check(File(root, "s1").mkdirs())
+    }
+
+    private fun store(root: File) = EditorTextStateStore(root) { _ -> Unit }
+
     @Test fun pendingDraftIsDurableButNotExportTruth() {
-        val root = Files.createTempDirectory("editor-text-store").toFile()
+        val root = createStoreRoot()
         try {
-            val store = EditorTextStateStore(root) { }
+            val store = store(root)
             store.setPendingDraft("s1", "u1", "machine text", "مسودة")
 
-            val reopened = EditorTextStateStore(root) { }.readUnit("s1", "u1")
+            val reopened = store(root).readUnit("s1", "u1")
             assertEquals("مسودة", reopened.pendingDraft)
             assertEquals("مسودة", reopened.visibleText("machine text"))
             assertEquals("machine text", reopened.exportText("machine text"))
@@ -25,13 +31,13 @@ class EditorTextStateStoreTest {
     }
 
     @Test fun committedManualRevisionBecomesDurableExportTruth() {
-        val root = Files.createTempDirectory("editor-text-store").toFile()
+        val root = createStoreRoot()
         try {
-            val store = EditorTextStateStore(root) { }
+            val store = store(root)
             store.setPendingDraft("s1", "u1", "machine text", "تصحيح يدوي")
             store.commitPendingDraft("s1", "u1", "machine text")
 
-            val reopened = EditorTextStateStore(root) { }.readUnit("s1", "u1")
+            val reopened = store(root).readUnit("s1", "u1")
             assertNull(reopened.pendingDraft)
             assertEquals("تصحيح يدوي", reopened.visibleText("machine text"))
             assertEquals("تصحيح يدوي", reopened.exportText("machine text"))
@@ -42,9 +48,9 @@ class EditorTextStateStoreTest {
     }
 
     @Test fun undoRedoMovesOnlyAcrossCommittedRevisionHistory() {
-        val root = Files.createTempDirectory("editor-text-store").toFile()
+        val root = createStoreRoot()
         try {
-            val store = EditorTextStateStore(root) { }
+            val store = store(root)
             store.setPendingDraft("s1", "u1", "machine", "يدوي 1")
             store.commitPendingDraft("s1", "u1", "machine")
             store.setPendingDraft("s1", "u1", "machine", "يدوي 2")
@@ -63,9 +69,9 @@ class EditorTextStateStoreTest {
     }
 
     @Test fun newCommitAfterUndoDropsRedoBranchDeterministically() {
-        val root = Files.createTempDirectory("editor-text-store").toFile()
+        val root = createStoreRoot()
         try {
-            val store = EditorTextStateStore(root) { }
+            val store = store(root)
             fun commit(text: String) {
                 store.setPendingDraft("s1", "u1", "machine", text)
                 store.commitPendingDraft("s1", "u1", "machine")
@@ -85,19 +91,19 @@ class EditorTextStateStoreTest {
     }
 
     @Test fun restoreMachineIsDurableAndDoesNotDeleteManualHistory() {
-        val root = Files.createTempDirectory("editor-text-store").toFile()
+        val root = createStoreRoot()
         try {
-            val store = EditorTextStateStore(root) { }
+            val store = store(root)
             store.setPendingDraft("s1", "u1", "machine", "يدوي")
             store.commitPendingDraft("s1", "u1", "machine")
             store.restoreMachine("s1", "u1")
 
-            val reopened = EditorTextStateStore(root) { }.readUnit("s1", "u1")
+            val reopened = store(root).readUnit("s1", "u1")
             assertEquals("machine", reopened.exportText("machine"))
             assertFalse(reopened.hasManualTruth)
             assertEquals(1, reopened.revisions.size)
-            assertTrue(EditorTextStateStore(root) { }.redo("s1", "u1"))
-            assertEquals("يدوي", EditorTextStateStore(root) { }.readUnit("s1", "u1").exportText("machine"))
+            assertTrue(store(root).redo("s1", "u1"))
+            assertEquals("يدوي", store(root).readUnit("s1", "u1").exportText("machine"))
         } finally {
             root.deleteRecursively()
         }
