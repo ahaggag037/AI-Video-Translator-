@@ -19,68 +19,44 @@ class ProductRouteSynchronizerTest {
     )
 
     @Test fun homeMayResumeIntoDurableDestination() {
-        assertEquals(
-            ProductRoute.EDITOR_TEXT,
-            ProductRouteSynchronizer.resolve(ProductRoute.HOME, readyFacts),
-        )
+        assertEquals(ProductRoute.EDITOR_TEXT, ProductRouteSynchronizer.resolve(ProductRoute.HOME, readyFacts))
     }
 
     @Test fun processingAdvancesToEditorWhenAcceptedTextAppears() {
-        assertEquals(
-            ProductRoute.EDITOR_TEXT,
-            ProductRouteSynchronizer.resolve(ProductRoute.PROCESSING, readyFacts),
-        )
+        assertEquals(ProductRoute.EDITOR_TEXT, ProductRouteSynchronizer.resolve(ProductRoute.PROCESSING, readyFacts))
     }
 
     @Test fun ordinaryDurableReadyStateDoesNotPullUserOutOfExportCenter() {
-        assertEquals(
-            ProductRoute.EXPORT_CENTER,
-            ProductRouteSynchronizer.resolve(ProductRoute.EXPORT_CENTER, readyFacts),
-        )
+        assertEquals(ProductRoute.EXPORT_CENTER, ProductRouteSynchronizer.resolve(ProductRoute.EXPORT_CENTER, readyFacts))
     }
 
     @Test fun unknownProviderOutcomePreemptsAnyOrdinaryProductSurface() {
         val unknown = readyFacts.copy(hasUnknownProviderOutcome = true, hasAcceptedText = false)
-
-        assertEquals(
-            ProductRoute.PROVIDER_RECOVERY,
-            ProductRouteSynchronizer.resolve(ProductRoute.EDITOR_TEXT, unknown),
-        )
+        assertEquals(ProductRoute.PROVIDER_RECOVERY, ProductRouteSynchronizer.resolve(ProductRoute.EDITOR_TEXT, unknown))
     }
 
     @Test fun unreadableSessionAlwaysFailsClosedToLocalRecovery() {
         val unreadable = readyFacts.copy(sessionReadable = false)
-
-        assertEquals(
-            ProductRoute.LOCAL_RECOVERY,
-            ProductRouteSynchronizer.resolve(ProductRoute.EXPORT_CENTER, unreadable),
-        )
+        assertEquals(ProductRoute.LOCAL_RECOVERY, ProductRouteSynchronizer.resolve(ProductRoute.EXPORT_CENTER, unreadable))
     }
 
     @Test fun missingSourcePreemptsMediaDependentEditorSurface() {
         val missingSource = readyFacts.copy(sourceAvailable = false)
-
-        assertEquals(
-            ProductRoute.SOURCE_RECOVERY,
-            ProductRouteSynchronizer.resolve(ProductRoute.EDITOR_TIMING, missingSource),
-        )
+        assertEquals(ProductRoute.SOURCE_RECOVERY, ProductRouteSynchronizer.resolve(ProductRoute.EDITOR_TIMING, missingSource))
     }
 
     @Test fun missingSourceDoesNotPreemptTextOnlyEditor() {
         val missingSource = readyFacts.copy(sourceAvailable = false)
-
-        assertEquals(
-            ProductRoute.EDITOR_TEXT,
-            ProductRouteSynchronizer.resolve(ProductRoute.EDITOR_TEXT, missingSource),
-        )
+        assertEquals(ProductRoute.EDITOR_TEXT, ProductRouteSynchronizer.resolve(ProductRoute.EDITOR_TEXT, missingSource))
     }
 
     @Test fun missingSourceDoesNotPreemptValidatedTextOnlyResult() {
         val missingSource = readyFacts.copy(sourceAvailable = false)
+        assertEquals(ProductRoute.RESULT, ProductRouteSynchronizer.resolve(ProductRoute.RESULT, missingSource))
+    }
 
-        assertEquals(
-            ProductRoute.RESULT,
-            ProductRouteSynchronizer.resolve(ProductRoute.RESULT, missingSource),
-        )
+    @Test fun missingSourceAllowsExplicitReplacementSourceReview() {
+        val missingSource = readyFacts.copy(sourceAvailable = false, hasAcceptedText = false)
+        assertEquals(ProductRoute.SOURCE_REVIEW, ProductRouteSynchronizer.resolve(ProductRoute.SOURCE_REVIEW, missingSource))
     }
 }
