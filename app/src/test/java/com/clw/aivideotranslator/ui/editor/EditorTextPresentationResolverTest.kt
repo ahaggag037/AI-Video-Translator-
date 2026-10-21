@@ -3,6 +3,7 @@ package com.clw.aivideotranslator.ui.editor
 import com.clw.aivideotranslator.semantic.MachineTranslationRevision
 import com.clw.aivideotranslator.semantic.ManualTranslationRevision
 import com.clw.aivideotranslator.semantic.PresentationIntervalUs
+import com.clw.aivideotranslator.semantic.PresentationTimeUs
 import com.clw.aivideotranslator.semantic.SemanticSourceUnit
 import com.clw.aivideotranslator.semantic.TranslationRecord
 import com.clw.aivideotranslator.semantic.TranslationReviewState
@@ -17,7 +18,10 @@ class EditorTextPresentationResolverTest {
         orderedWordIds = listOf("w1"),
         sourceText = "hello world",
         sourceTextHash = "source-hash",
-        sourceInterval = PresentationIntervalUs(0L, 1_000_000L),
+        sourceInterval = PresentationIntervalUs(
+            start = PresentationTimeUs(0L),
+            end = PresentationTimeUs(1_000_000L),
+        ),
         segmentationVersion = "v1",
     )
 
