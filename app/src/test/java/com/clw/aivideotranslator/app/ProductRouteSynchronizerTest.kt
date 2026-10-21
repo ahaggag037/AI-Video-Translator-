@@ -74,4 +74,13 @@ class ProductRouteSynchronizerTest {
             ProductRouteSynchronizer.resolve(ProductRoute.EDITOR_TEXT, missingSource),
         )
     }
+
+    @Test fun missingSourceDoesNotPreemptValidatedTextOnlyResult() {
+        val missingSource = readyFacts.copy(sourceAvailable = false)
+
+        assertEquals(
+            ProductRoute.RESULT,
+            ProductRouteSynchronizer.resolve(ProductRoute.RESULT, missingSource),
+        )
+    }
 }
