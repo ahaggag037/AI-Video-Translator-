@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.dp
 internal fun EditorTextScreen(
     presentation: EditorTextPresentation,
     onBack: () -> Unit,
+    onPreviousCue: () -> Unit,
+    onNextCue: () -> Unit,
     onTargetChange: (String) -> Unit,
     onCommitDraft: () -> Unit,
     onUndo: () -> Unit,
@@ -122,11 +124,30 @@ internal fun EditorTextScreen(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Button(
-                        onClick = {},
+                    OutlinedButton(
+                        onClick = onPreviousCue,
+                        enabled = presentation.canPreviousCue,
                         modifier = Modifier.weight(1f),
-                    ) { Text("النص") }
+                    ) { Text("السابق") }
+                    Text(
+                        text = presentation.cuePositionLabel.orEmpty(),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    OutlinedButton(
+                        onClick = onNextCue,
+                        enabled = presentation.canNextCue,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("التالي") }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("النص") }
                     OutlinedButton(
                         onClick = onOpenTiming,
                         enabled = presentation.timingEnabled,
@@ -156,7 +177,7 @@ internal fun EditorTextScreen(
                 )
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = presentation.sourceText,
+                        text = presentation.sourceText.ifBlank { "النص الأصلي غير متاح في وضع الاسترداد الحالي." },
                         modifier = Modifier.padding(16.dp),
                         style = MaterialTheme.typography.bodyLarge,
                     )
@@ -184,20 +205,14 @@ internal fun EditorTextScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(onClick = onUndo, modifier = Modifier.weight(1f)) {
-                        Text("تراجع")
-                    }
-                    OutlinedButton(onClick = onRedo, modifier = Modifier.weight(1f)) {
-                        Text("إعادة")
-                    }
+                    OutlinedButton(onClick = onUndo, modifier = Modifier.weight(1f)) { Text("تراجع") }
+                    OutlinedButton(onClick = onRedo, modifier = Modifier.weight(1f)) { Text("إعادة") }
                 }
 
                 OutlinedButton(
                     onClick = onRestoreMachine,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("استعادة الترجمة الآلية")
-                }
+                ) { Text("استعادة الترجمة الآلية") }
 
                 Button(
                     onClick = onCommitDraft,
@@ -205,9 +220,7 @@ internal fun EditorTextScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp),
-                ) {
-                    Text("حفظ التعديل")
-                }
+                ) { Text("حفظ التعديل") }
 
                 if (presentation.sourceMissing) {
                     Button(
@@ -216,9 +229,7 @@ internal fun EditorTextScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
-                    ) {
-                        Text("تصدير ملف SRT")
-                    }
+                    ) { Text("تصدير ملف SRT") }
                 } else {
                     Button(
                         onClick = onOpenExport,
@@ -226,9 +237,7 @@ internal fun EditorTextScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
-                    ) {
-                        Text("تصدير")
-                    }
+                    ) { Text("تصدير") }
                 }
             }
         }
