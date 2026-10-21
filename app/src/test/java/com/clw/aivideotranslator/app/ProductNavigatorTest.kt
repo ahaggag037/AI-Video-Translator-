@@ -28,6 +28,22 @@ class ProductNavigatorTest {
         assertEquals(ProductRoute.HOME, navigator.route)
     }
 
+    @Test fun activatedSourceWithMissingCredentialRoutesToAiSetup() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.SOURCE_REVIEW)
+
+        navigator.onEvent(ProductNavigationEvent.SourceActivated(needsAiSetup = true))
+
+        assertEquals(ProductRoute.AI_SETUP, navigator.route)
+    }
+
+    @Test fun activatedSourceWithUsableCredentialRoutesToProcessing() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.SOURCE_REVIEW)
+
+        navigator.onEvent(ProductNavigationEvent.SourceActivated(needsAiSetup = false))
+
+        assertEquals(ProductRoute.PROCESSING, navigator.route)
+    }
+
     @Test fun routeStateContainsNoDurableSessionOrProviderPayload() {
         val fields = ProductNavigator::class.java.declaredFields.map { it.type.name }
 
