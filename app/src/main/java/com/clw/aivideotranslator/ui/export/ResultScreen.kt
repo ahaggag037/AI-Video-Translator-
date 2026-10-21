@@ -77,7 +77,6 @@ internal fun ResultScreen(
                     kind = OutputKind.SRT,
                     onOpen = onOpen,
                     onShare = onShare,
-                    onLocate = onLocate,
                     onRetry = onRetry,
                 )
 
@@ -88,7 +87,6 @@ internal fun ResultScreen(
                     kind = OutputKind.MP4,
                     onOpen = onOpen,
                     onShare = onShare,
-                    onLocate = onLocate,
                     onRetry = onRetry,
                 )
 
@@ -111,7 +109,6 @@ private fun outputCard(
     kind: OutputKind,
     onOpen: (OutputKind) -> Unit,
     onShare: (OutputKind) -> Unit,
-    onLocate: (OutputKind) -> Unit,
     onRetry: (OutputKind) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -145,9 +142,6 @@ private fun outputCard(
                     }
                     OutlinedButton(onClick = { onShare(kind) }, modifier = Modifier.weight(1f)) {
                         Text("مشاركة")
-                    }
-                    OutlinedButton(onClick = { onLocate(kind) }, modifier = Modifier.weight(1f)) {
-                        Text("الموقع")
                     }
                 }
             }
