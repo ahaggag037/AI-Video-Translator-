@@ -35,13 +35,14 @@ class EditorTextStateStoreTest {
         try {
             val store = store(root)
             store.setPendingDraft("s1", "u1", "machine text", "تصحيح يدوي")
-            store.commitPendingDraft("s1", "u1", "machine text")
+            store.commitPendingDraft("s1", "u1", "source text", "machine text")
 
             val reopened = store(root).readUnit("s1", "u1")
             assertNull(reopened.pendingDraft)
             assertEquals("تصحيح يدوي", reopened.visibleText("machine text"))
             assertEquals("تصحيح يدوي", reopened.exportText("machine text"))
             assertTrue(reopened.hasManualTruth)
+            assertTrue(reopened.revisions.single().basedOnSourceTextHash.isNotBlank())
         } finally {
             root.deleteRecursively()
         }
@@ -52,9 +53,9 @@ class EditorTextStateStoreTest {
         try {
             val store = store(root)
             store.setPendingDraft("s1", "u1", "machine", "يدوي 1")
-            store.commitPendingDraft("s1", "u1", "machine")
+            store.commitPendingDraft("s1", "u1", "source", "machine")
             store.setPendingDraft("s1", "u1", "machine", "يدوي 2")
-            store.commitPendingDraft("s1", "u1", "machine")
+            store.commitPendingDraft("s1", "u1", "source", "machine")
 
             assertEquals("يدوي 2", store.readUnit("s1", "u1").exportText("machine"))
             store.undo("s1", "u1")
@@ -74,7 +75,7 @@ class EditorTextStateStoreTest {
             val store = store(root)
             fun commit(text: String) {
                 store.setPendingDraft("s1", "u1", "machine", text)
-                store.commitPendingDraft("s1", "u1", "machine")
+                store.commitPendingDraft("s1", "u1", "source", "machine")
             }
             commit("واحد")
             commit("اثنان")
@@ -95,7 +96,7 @@ class EditorTextStateStoreTest {
         try {
             val store = store(root)
             store.setPendingDraft("s1", "u1", "machine", "يدوي")
-            store.commitPendingDraft("s1", "u1", "machine")
+            store.commitPendingDraft("s1", "u1", "source", "machine")
             store.restoreMachine("s1", "u1")
 
             val reopened = store(root).readUnit("s1", "u1")
