@@ -56,9 +56,7 @@ internal fun ExportCenterScreen(
         topBar = {
             TopAppBar(
                 title = { Text("التصدير") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) { Text("رجوع") }
-                },
+                navigationIcon = { TextButton(onClick = onBack) { Text("رجوع") } },
             )
         },
     ) { contentPadding ->
@@ -71,35 +69,18 @@ internal fun ExportCenterScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 680.dp),
+                modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    text = "اختر نوع الملف",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-
-                modeButton(
-                    label = "ملف ترجمة فقط (SRT)",
-                    selected = presentation.mode == ExportMode.SRT_ONLY,
-                    enabled = presentation.eligibility.srtEligible,
-                    onClick = { onModeChange(ExportMode.SRT_ONLY) },
-                )
-                modeButton(
-                    label = "فيديو مع ترجمة مدمجة (MP4)",
-                    selected = presentation.mode == ExportMode.MP4_ONLY,
-                    enabled = presentation.eligibility.mp4Eligible,
-                    onClick = { onModeChange(ExportMode.MP4_ONLY) },
-                )
-                modeButton(
-                    label = "الفيديو + ملف الترجمة",
-                    selected = presentation.mode == ExportMode.BOTH,
-                    enabled = presentation.eligibility.srtEligible && presentation.eligibility.mp4Eligible,
-                    onClick = { onModeChange(ExportMode.BOTH) },
-                )
+                Text("اختر نوع الملف", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                modeButton("ملف ترجمة فقط (SRT)", presentation.mode == ExportMode.SRT_ONLY,
+                    presentation.eligibility.srtEligible) { onModeChange(ExportMode.SRT_ONLY) }
+                modeButton("فيديو مع ترجمة مدمجة (MP4)", presentation.mode == ExportMode.MP4_ONLY,
+                    presentation.eligibility.mp4Eligible) { onModeChange(ExportMode.MP4_ONLY) }
+                modeButton("الفيديو + ملف الترجمة", presentation.mode == ExportMode.BOTH,
+                    presentation.eligibility.srtEligible && presentation.eligibility.mp4Eligible) {
+                    onModeChange(ExportMode.BOTH)
+                }
 
                 if (!presentation.eligibility.mp4Eligible && presentation.eligibility.srtEligible) {
                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -116,71 +97,45 @@ internal fun ExportCenterScreen(
                 }
 
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("اسم الإخراج", fontWeight = FontWeight.Bold)
                         Text(presentation.baseFileName)
-                        TextButton(onClick = onEditFilename) { Text("تعديل الاسم") }
+                        Text(
+                            "يُشتق الاسم بأمان من اسم الفيديو الأصلي، ويمكن إعادة تسمية الملف بعد الحفظ من مدير الملفات.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
 
-                if (presentation.mode != ExportMode.MP4_ONLY) {
-                    outputLocation("SRT", presentation.srtLocationLabel)
-                }
-                if (presentation.mode != ExportMode.SRT_ONLY) {
-                    outputLocation("MP4", presentation.mp4LocationLabel)
-                }
+                if (presentation.mode != ExportMode.MP4_ONLY) outputLocation("SRT", presentation.srtLocationLabel)
+                if (presentation.mode != ExportMode.SRT_ONLY) outputLocation("MP4", presentation.mp4LocationLabel)
 
                 if (presentation.mode == ExportMode.SRT_ONLY) {
-                    Text(
-                        text = "مسار SRT سريع ولا يشغّل فك ترميز أو حرق أو ترميز الفيديو.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Text("مسار SRT سريع ولا يشغّل فك ترميز أو حرق أو ترميز الفيديو.",
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (presentation.mode == ExportMode.BOTH) {
-                    Text(
-                        text = "سيتم تثبيت نتيجة SRT بشكل مستقل أولًا، ثم يستمر إنشاء MP4. نجاح أحدهما لا يختفي إذا فشل الآخر.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Text("سيتم تثبيت نتيجة SRT بشكل مستقل أولًا، ثم يستمر إنشاء MP4. نجاح أحدهما لا يختفي إذا فشل الآخر.",
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 Button(
                     onClick = onExport,
                     enabled = selectedEligible,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                ) {
-                    Text("بدء التصدير")
-                }
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) { Text("بدء التصدير") }
             }
         }
     }
 }
 
 @Composable
-private fun modeButton(
-    label: String,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
+private fun modeButton(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     if (selected) {
-        Button(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(label) }
+        Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(label) }
     } else {
-        OutlinedButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(label) }
+        OutlinedButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(label) }
     }
 }
 
@@ -188,9 +143,7 @@ private fun modeButton(
 private fun outputLocation(kind: String, location: String) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(kind, fontWeight = FontWeight.Bold)
