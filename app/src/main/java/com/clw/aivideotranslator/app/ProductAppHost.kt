@@ -23,6 +23,7 @@ import com.clw.aivideotranslator.session.TranslationSessionViewModel
 import com.clw.aivideotranslator.source.CandidateActivationOutcome
 import com.clw.aivideotranslator.source.SourceSelectionViewModel
 import com.clw.aivideotranslator.ui.ai.AiCredentialStatus
+import com.clw.aivideotranslator.ui.editor.EditorCueNavigator
 import com.clw.aivideotranslator.ui.editor.EditorTextPresentation
 import com.clw.aivideotranslator.ui.editor.LegacyEditorTextProjection
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentation
@@ -52,9 +53,11 @@ internal fun ProductAppHost(
     val candidate by sourceSelectionViewModel.snapshot.collectAsState()
 
     val navigator = remember { ProductNavigator() }
+    val cueNavigator = remember { EditorCueNavigator() }
     var route by remember { mutableStateOf(navigator.route) }
     var apiKey by remember { mutableStateOf("") }
     var editorUnitState by remember { mutableStateOf(UnitEditorTextState()) }
+    var cueSelection by remember { mutableStateOf(cueNavigator.reconcile(emptyList())) }
 
     fun navigate(event: ProductNavigationEvent) {
         navigator.onEvent(event)
@@ -114,8 +117,17 @@ internal fun ProductAppHost(
         }
     }
 
-    val activeEntry = durableTranslation.entries.firstOrNull()
-    val activeUnit = durableTranslation.liveUnits?.firstOrNull()
+    val unitIds = durableTranslation.entries.map { it.sourceUnitId }
+    LaunchedEffect(unitIds) {
+        cueSelection = cueNavigator.reconcile(unitIds)
+    }
+
+    val activeEntry = cueSelection.unitId?.let { selectedId ->
+        durableTranslation.entries.firstOrNull { it.sourceUnitId == selectedId }
+    }
+    val activeUnit = cueSelection.unitId?.let { selectedId ->
+        durableTranslation.liveUnits?.firstOrNull { it.id == selectedId }
+    }
     val activeSessionId = durableTranslation.sessionId ?: durableSource.sessionId
 
     LaunchedEffect(activeSessionId, activeEntry?.sourceUnitId) {
@@ -134,8 +146,8 @@ internal fun ProductAppHost(
             editorState = editorUnitState,
             sourceAvailable = durableSource.phase == DurableSourcePhase.BOUND,
             reviewRequired = durableTranslation.phase == DurableTranslationPhase.BLOCKED,
-            cueIndex = 0,
-            cueCount = durableTranslation.entries.size.coerceAtLeast(1),
+            cueIndex = cueSelection.index,
+            cueCount = cueSelection.count.coerceAtLeast(1),
         )
     } else {
         EditorTextPresentation(
@@ -301,6 +313,12 @@ internal fun ProductAppHost(
                     }
                 }
             }
+        },
+        onPreviousEditorCue = {
+            cueSelection = cueNavigator.previous(unitIds)
+        },
+        onNextEditorCue = {
+            cueSelection = cueNavigator.next(unitIds)
         },
         onOpenTextEditor = { navigate(ProductNavigationEvent.OpenTextEditor) },
         onOpenTimingEditor = { navigate(ProductNavigationEvent.OpenTimingEditor) },
