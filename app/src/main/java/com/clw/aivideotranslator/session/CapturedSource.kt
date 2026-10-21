@@ -7,8 +7,8 @@ import java.io.File
 
 /**
  * Operation-owned bytes from SourceAttachmentBuilder's one provider read. The source path is never
- * exposed; all decoding uses this copy. One preparation per capture, one unique WAV, no shared sweep.
- * This is an in-process ownership contract, not protection against a malicious same-UID writer.
+ * exposed; all decoding uses this copy. Exactly one prepared WAV may be live at a time so long-video
+ * processing stays disk-bounded while requests remain sequential and fail-closed.
  */
 internal class CapturedSource(
     private val sourceCopy: File,
@@ -19,8 +19,6 @@ internal class CapturedSource(
 
     @Synchronized fun requireMatches(expected: SourceAttachment) {
         check(!closed) { "source capture is closed" }
-        // Read-grant availability can change without changing source bytes/selection. It was an
-        // observation when the immutable attachment was created, not part of this operation's proof.
         require(attachment.copy(persistedReadGrantAtCapture = expected.persistedReadGrantAtCapture) == expected) {
             "captured source no longer matches the bound attachment"
         }
@@ -28,10 +26,31 @@ internal class CapturedSource(
 
     @Synchronized fun prepareFirstMinute(): DetailedSttAudioPreparation {
         check(!closed) { "source capture is closed" }
-        check(preparedFile == null) { "capture already prepared; create a new operation to retry" }
+        check(preparedFile == null) { "capture already has a live prepared STT window" }
         val wav = File.createTempFile("captured-stt-", ".wav", sourceCopy.parentFile)
-        preparedFile = wav // Own cleanup even if decoding fails halfway through.
+        preparedFile = wav
         return SttAudioPreparer.preparePrivateSourceFirstMinute(sourceCopy, wav).getOrThrow()
+    }
+
+    @Synchronized fun prepareWindow(window: SttWindow): DetailedSttAudioPreparation {
+        check(!closed) { "source capture is closed" }
+        check(preparedFile == null) { "capture already has a live prepared STT window" }
+        require(window.endUs <= attachment.durationUs) { "STT window exceeds source duration" }
+        val wav = File.createTempFile("captured-stt-${window.index}-", ".wav", sourceCopy.parentFile)
+        preparedFile = wav
+        return SttAudioPreparer.preparePrivateSourceWindow(
+            sourceCopy = sourceCopy,
+            outputFile = wav,
+            startUs = window.startUs,
+            endUs = window.endUs,
+        ).getOrThrow()
+    }
+
+    /** Release a completed/rejected window before preparing the next one. */
+    @Synchronized fun releasePreparedWindow() {
+        val file = preparedFile ?: return
+        preparedFile = null
+        if (file.exists() && !file.delete()) file.deleteOnExit()
     }
 
     @Synchronized override fun close() {
@@ -40,5 +59,6 @@ internal class CapturedSource(
         listOfNotNull(preparedFile, sourceCopy).forEach { file ->
             if (file.exists() && !file.delete()) file.deleteOnExit()
         }
+        preparedFile = null
     }
 }
