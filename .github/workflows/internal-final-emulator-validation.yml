@@ -43,13 +43,14 @@ jobs:
           arch: x86_64
           profile: pixel_7_pro
           disable-animations: true
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-metrics
           script: |
-            set -euo pipefail
+            set -eu
             gradle --stacktrace connectedDebugAndroidTest
             gradle --stacktrace installDebug
             adb shell am force-stop com.clw.aivideotranslator
-            adb shell am start -W -n com.clw.aivideotranslator/.ProductMainActivity | tee launcher-smoke.txt
+            adb shell am start -W -n com.clw.aivideotranslator/.ProductMainActivity > launcher-smoke.txt
+            cat launcher-smoke.txt
             grep -Eq 'Status: ok|Complete' launcher-smoke.txt
             adb shell pidof com.clw.aivideotranslator
             adb exec-out screencap -p > final-launcher.png
