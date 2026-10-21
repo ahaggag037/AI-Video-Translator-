@@ -4,6 +4,7 @@ import android.app.Application
 import com.clw.aivideotranslator.credential.AndroidAiCredentialStore
 import com.clw.aivideotranslator.editor.DisplayTimingStateStore
 import com.clw.aivideotranslator.editor.EditorTextStateStore
+import com.clw.aivideotranslator.editor.SubtitleStyleStateStore
 import com.clw.aivideotranslator.session.ActiveSessionRegistry
 import com.clw.aivideotranslator.session.SessionManifest
 import com.clw.aivideotranslator.session.TranslationRequestPlanStore
@@ -34,6 +35,13 @@ class AiVideoTranslatorApplication : Application() {
 
     internal val displayTimingStates: DisplayTimingStateStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         DisplayTimingStateStore(
+            sessionsRoot = translationSessionRoot,
+            validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
+        )
+    }
+
+    internal val subtitleStyleStates: SubtitleStyleStateStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        SubtitleStyleStateStore(
             sessionsRoot = translationSessionRoot,
             validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
         )
