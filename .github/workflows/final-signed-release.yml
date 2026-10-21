@@ -1,0 +1,82 @@
+name: Final Signed Release APK
+
+on:
+  push:
+    branches:
+      - build/final-signed-release
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AI_TRANSLATOR_RELEASE_STORE_FILE: release-keystore.jks
+      AI_TRANSLATOR_RELEASE_STORE_PASSWORD: ${{ secrets.AI_TRANSLATOR_RELEASE_STORE_PASSWORD }}
+      AI_TRANSLATOR_RELEASE_KEY_ALIAS: ${{ secrets.AI_TRANSLATOR_RELEASE_KEY_ALIAS }}
+      AI_TRANSLATOR_RELEASE_KEY_PASSWORD: ${{ secrets.AI_TRANSLATOR_RELEASE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Validate release signing secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.AI_TRANSLATOR_RELEASE_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "${KEYSTORE_B64:-}" || { echo "Missing AI_TRANSLATOR_RELEASE_KEYSTORE_B64"; exit 1; }
+          test -n "${AI_TRANSLATOR_RELEASE_STORE_PASSWORD:-}" || { echo "Missing AI_TRANSLATOR_RELEASE_STORE_PASSWORD"; exit 1; }
+          test -n "${AI_TRANSLATOR_RELEASE_KEY_ALIAS:-}" || { echo "Missing AI_TRANSLATOR_RELEASE_KEY_ALIAS"; exit 1; }
+          test -n "${AI_TRANSLATOR_RELEASE_KEY_PASSWORD:-}" || { echo "Missing AI_TRANSLATOR_RELEASE_KEY_PASSWORD"; exit 1; }
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > release-keystore.jks
+          test -s release-keystore.jks
+          chmod 600 release-keystore.jks
+
+      - name: Unit tests
+        run: gradle --stacktrace testDebugUnitTest
+
+      - name: Lint
+        run: gradle --stacktrace lintDebug
+
+      - name: Build signed release APK
+        run: gradle --stacktrace :app:assembleRelease
+
+      - name: Verify release APK signature
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK"
+          sha256sum "$APK" > "$APK.sha256"
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-video-translator-final-signed-release-apk
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/app-release.apk.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove decoded keystore
+        if: always()
+        run: rm -f release-keystore.jks
