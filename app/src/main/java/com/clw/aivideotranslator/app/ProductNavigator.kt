@@ -11,6 +11,7 @@ internal enum class ProductRoute {
     SOURCE_REVIEW,
     AI_SETUP,
     PROCESSING,
+    PROVIDER_RECOVERY,
 }
 
 internal sealed interface ProductNavigationEvent {
@@ -19,6 +20,8 @@ internal sealed interface ProductNavigationEvent {
     data class SourceActivated(val needsAiSetup: Boolean) : ProductNavigationEvent
     data object BackFromAiSetup : ProductNavigationEvent
     data object AiCredentialAccepted : ProductNavigationEvent
+    data object ProviderOutcomeUnknown : ProductNavigationEvent
+    data object KeepProviderStateAndReturn : ProductNavigationEvent
 }
 
 internal class ProductNavigator(
@@ -38,6 +41,8 @@ internal class ProductNavigator(
             }
             ProductNavigationEvent.BackFromAiSetup -> ProductRoute.SOURCE_REVIEW
             ProductNavigationEvent.AiCredentialAccepted -> ProductRoute.PROCESSING
+            ProductNavigationEvent.ProviderOutcomeUnknown -> ProductRoute.PROVIDER_RECOVERY
+            ProductNavigationEvent.KeepProviderStateAndReturn -> ProductRoute.HOME
         }
     }
 }
