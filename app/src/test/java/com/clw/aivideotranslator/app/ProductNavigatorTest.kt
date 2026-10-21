@@ -44,6 +44,22 @@ class ProductNavigatorTest {
         assertEquals(ProductRoute.PROCESSING, navigator.route)
     }
 
+    @Test fun backFromAiSetupReturnsToSourceReviewWithoutProviderSideEffect() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.AI_SETUP)
+
+        navigator.onEvent(ProductNavigationEvent.BackFromAiSetup)
+
+        assertEquals(ProductRoute.SOURCE_REVIEW, navigator.route)
+    }
+
+    @Test fun acceptedAiCredentialMovesToProcessing() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.AI_SETUP)
+
+        navigator.onEvent(ProductNavigationEvent.AiCredentialAccepted)
+
+        assertEquals(ProductRoute.PROCESSING, navigator.route)
+    }
+
     @Test fun routeStateContainsNoDurableSessionOrProviderPayload() {
         val fields = ProductNavigator::class.java.declaredFields.map { it.type.name }
 
