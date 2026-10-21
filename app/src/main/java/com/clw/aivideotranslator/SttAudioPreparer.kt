@@ -28,7 +28,6 @@ data class SttAudioProfile(
     val sizeLabel: String get() = formatBytes(sizeBytes)
 }
 
-/** Exact container-track observations used by the decoder; no track-selection policy is inferred here. */
 data class SttInputAudioTrack(
     val containerIndex: Int,
     val mime: String,
@@ -46,12 +45,9 @@ data class SttInputAudioTrack(
 
 data class SttAudioPreparationProvenance(
     val inputTrack: SttInputAudioTrack,
-    /** Exact mono PCM frames written to the WAV data section. */
     val pcmFrameCount: Long,
 ) {
-    init {
-        require(pcmFrameCount > 0L) { "empty prepared PCM" }
-    }
+    init { require(pcmFrameCount > 0L) { "empty prepared PCM" } }
 }
 
 data class DetailedSttAudioPreparation(
@@ -60,7 +56,6 @@ data class DetailedSttAudioPreparation(
 )
 
 object SttAudioPreparer {
-    /** Legacy-compatible surface. Selection, WAV bytes and returned profile semantics are unchanged. */
     fun prepareFirstMinute(
         context: Context,
         sourceUri: Uri,
@@ -68,47 +63,75 @@ object SttAudioPreparer {
     ): Result<SttAudioProfile> = prepareFirstMinuteDetailed(context, sourceUri, durationUs)
         .map(DetailedSttAudioPreparation::profile)
 
-    /**
-     * Additive provenance surface for durable-session/X001 evidence plumbing.
-     * It exposes what the existing preparer actually decoded; it does not verify clock mapping,
-     * reinterpret provider timing units, or change first-audio-track selection.
-     */
     fun prepareFirstMinuteDetailed(
         context: Context,
         sourceUri: Uri,
         durationUs: Long = STT_SAMPLE_DURATION_US,
     ): Result<DetailedSttAudioPreparation> = runCatching {
         require(durationUs > 0L) { "مدة عينة STT يجب أن تكون أكبر من صفر" }
-
         val outputDir = File(context.cacheDir, "p0_stt_audio").apply { mkdirs() }
         val outputFile = File(outputDir, "stt_sample.wav")
-        if (outputFile.exists() && !outputFile.delete()) {
-            error("تعذر استبدال ملف WAV السابق")
-        }
-
-        decodeFirstWindow(outputFile, durationUs) { it.setDataSource(context, sourceUri, null) }
+        if (outputFile.exists() && !outputFile.delete()) error("تعذر استبدال ملف WAV السابق")
+        decodeWindow(
+            outputFile = outputFile,
+            requestedStartUs = null,
+            requestedEndUs = null,
+            legacyDurationUs = durationUs,
+        ) { it.setDataSource(context, sourceUri, null) }
     }
 
-    /** Owned private source and unique output only; does not reopen a provider URI. */
     internal fun preparePrivateSourceFirstMinute(
         sourceCopy: File,
         outputFile: File,
     ): Result<DetailedSttAudioPreparation> = runCatching {
         require(sourceCopy.isFile) { "private source capture is missing" }
         require(sourceCopy.canonicalFile != outputFile.canonicalFile) { "source/output alias" }
-        decodeFirstWindow(outputFile, STT_SAMPLE_DURATION_US) { it.setDataSource(sourceCopy.absolutePath) }
+        decodeWindow(
+            outputFile = outputFile,
+            requestedStartUs = null,
+            requestedEndUs = null,
+            legacyDurationUs = STT_SAMPLE_DURATION_US,
+        ) { it.setDataSource(sourceCopy.absolutePath) }
     }
 
-    private fun decodeFirstWindow(
+    /**
+     * Full-video path. Bounds are absolute source presentation time and end-exclusive. The exact
+     * first decoded audio sample at/after start becomes [SttAudioProfile.sourceStartUs], so later
+     * clock mapping uses observed media time rather than the nominal chunk boundary.
+     */
+    internal fun preparePrivateSourceWindow(
+        sourceCopy: File,
         outputFile: File,
-        durationUs: Long,
+        startUs: Long,
+        endUs: Long,
+    ): Result<DetailedSttAudioPreparation> = runCatching {
+        require(sourceCopy.isFile) { "private source capture is missing" }
+        require(sourceCopy.canonicalFile != outputFile.canonicalFile) { "source/output alias" }
+        require(startUs >= 0L && endUs > startUs) { "invalid STT source window" }
+        require(endUs - startUs <= STT_SAMPLE_DURATION_US) { "STT window exceeds qualified provider request size" }
+        decodeWindow(
+            outputFile = outputFile,
+            requestedStartUs = startUs,
+            requestedEndUs = endUs,
+            legacyDurationUs = null,
+        ) { it.setDataSource(sourceCopy.absolutePath) }
+    }
+
+    private fun decodeWindow(
+        outputFile: File,
+        requestedStartUs: Long?,
+        requestedEndUs: Long?,
+        legacyDurationUs: Long?,
         bindSource: (MediaExtractor) -> Unit,
     ): DetailedSttAudioPreparation {
+        val boundedMode = requestedStartUs != null || requestedEndUs != null
+        require((requestedStartUs == null) == (requestedEndUs == null)) { "partial STT window bounds" }
+        require(boundedMode || legacyDurationUs != null) { "missing STT window duration" }
+
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
         var decoderStarted = false
         var raf: RandomAccessFile? = null
-
         var outputSampleRate = 0
         var outputChannelCount = 0
         var outputPcmEncoding = AudioFormat.ENCODING_PCM_16BIT
@@ -124,16 +147,11 @@ object SttAudioPreparer {
             require(audioTrackIndex >= 0) { "الفيديو لا يحتوي على مسار صوت قابل للتحويل إلى WAV" }
 
             val inputFormat = extractor.getTrackFormat(audioTrackIndex)
-            val mime = inputFormat.getString(MediaFormat.KEY_MIME)
-                ?: error("تعذر معرفة ترميز مسار الصوت")
+            val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: error("تعذر معرفة ترميز مسار الصوت")
             val inputSampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val inputChannelCount = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            // Language is additive provenance only. Malformed/unsupported language metadata must not
-            // turn a source that the legacy preparer could decode into a new preparation failure.
             val inputLanguage = runCatching {
-                if (inputFormat.containsKey(MediaFormat.KEY_LANGUAGE)) {
-                    inputFormat.getString(MediaFormat.KEY_LANGUAGE)
-                } else null
+                if (inputFormat.containsKey(MediaFormat.KEY_LANGUAGE)) inputFormat.getString(MediaFormat.KEY_LANGUAGE) else null
             }.getOrNull()
             inputTrack = SttInputAudioTrack(
                 containerIndex = audioTrackIndex,
@@ -144,13 +162,25 @@ object SttAudioPreparer {
             )
 
             extractor.selectTrack(audioTrackIndex)
-            sourceStartUs = extractor.sampleTime
-            require(sourceStartUs >= 0L) { "تعذر الوصول إلى أول عينة صوت" }
-            val sourceStopUs = sourceStartUs + durationUs
+            val sourceStopUs: Long
+            if (boundedMode) {
+                val start = requireNotNull(requestedStartUs)
+                val end = requireNotNull(requestedEndUs)
+                extractor.seekTo(start, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                while (extractor.sampleTime in 0 until start) {
+                    if (!extractor.advance()) break
+                }
+                sourceStartUs = extractor.sampleTime
+                require(sourceStartUs >= start && sourceStartUs < end) { "STT window contains no audio sample" }
+                sourceStopUs = end
+            } else {
+                sourceStartUs = extractor.sampleTime
+                require(sourceStartUs >= 0L) { "تعذر الوصول إلى أول عينة صوت" }
+                sourceStopUs = Math.addExact(sourceStartUs, requireNotNull(legacyDurationUs))
+            }
 
             outputSampleRate = inputSampleRate
             outputChannelCount = inputChannelCount
-
             decoder = MediaCodec.createDecoderByType(mime)
             decoder.configure(inputFormat, null, null, 0)
             decoder.start()
@@ -171,41 +201,21 @@ object SttAudioPreparer {
                 if (!inputEnded) {
                     val inputIndex = decoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
                     if (inputIndex >= 0) {
-                        val inputBuffer = decoder.getInputBuffer(inputIndex)
-                            ?: error("تعذر الوصول إلى بافر فك الصوت")
+                        val inputBuffer = decoder.getInputBuffer(inputIndex) ?: error("تعذر الوصول إلى بافر فك الصوت")
                         inputBuffer.clear()
-
                         val sampleTimeUs = extractor.sampleTime
                         val shouldEnd = sourceExhausted || sampleTimeUs < 0L || sampleTimeUs >= sourceStopUs
                         if (shouldEnd) {
-                            decoder.queueInputBuffer(
-                                inputIndex,
-                                0,
-                                0,
-                                lastQueuedPresentationTimeUs,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM,
-                            )
+                            decoder.queueInputBuffer(inputIndex, 0, 0, lastQueuedPresentationTimeUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputEnded = true
                         } else {
                             val sampleSize = extractor.readSampleData(inputBuffer, 0)
                             if (sampleSize < 0) {
-                                decoder.queueInputBuffer(
-                                    inputIndex,
-                                    0,
-                                    0,
-                                    lastQueuedPresentationTimeUs,
-                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM,
-                                )
+                                decoder.queueInputBuffer(inputIndex, 0, 0, lastQueuedPresentationTimeUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 inputEnded = true
                             } else {
                                 val presentationTimeUs = sampleTimeUs - sourceStartUs
-                                decoder.queueInputBuffer(
-                                    inputIndex,
-                                    0,
-                                    sampleSize,
-                                    presentationTimeUs,
-                                    0,
-                                )
+                                decoder.queueInputBuffer(inputIndex, 0, sampleSize, presentationTimeUs, 0)
                                 lastQueuedPresentationTimeUs = presentationTimeUs
                                 if (!extractor.advance()) sourceExhausted = true
                             }
@@ -221,15 +231,11 @@ object SttAudioPreparer {
                         outputChannelCount = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                         outputPcmEncoding = if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                             outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
-                        } else {
-                            AudioFormat.ENCODING_PCM_16BIT
-                        }
+                        } else AudioFormat.ENCODING_PCM_16BIT
                     }
                     else -> if (outputIndex >= 0) {
                         val outputBuffer = decoder.getOutputBuffer(outputIndex)
-                        if (outputBuffer != null && info.size > 0 &&
-                            info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0
-                        ) {
+                        if (outputBuffer != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                             require(outputSampleRate > 0) { "معدل عينة الصوت غير صالح" }
                             require(outputChannelCount > 0) { "عدد قنوات الصوت غير صالح" }
                             val writtenFrames = writeMonoPcm16(
@@ -243,10 +249,7 @@ object SttAudioPreparer {
                             monoFramesWritten += writtenFrames
                             pcmBytesWritten += writtenFrames * 2L
                         }
-
-                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            outputEnded = true
-                        }
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputEnded = true
                         decoder.releaseOutputBuffer(outputIndex, false)
                     }
                 }
@@ -254,6 +257,11 @@ object SttAudioPreparer {
 
             require(monoFramesWritten > 0L) { "لم ينتج مفكك الصوت أي PCM صالح" }
             sourceEndUs = sourceStartUs + (monoFramesWritten * 1_000_000L / outputSampleRate)
+            if (boundedMode) {
+                require(sourceEndUs <= requireNotNull(requestedEndUs) + 100_000L) {
+                    "decoded STT window escaped requested source bounds"
+                }
+            }
             raf.seek(0L)
             raf.write(buildWavHeader(outputSampleRate, pcmBytesWritten))
         } finally {
@@ -265,7 +273,6 @@ object SttAudioPreparer {
 
         require(outputFile.exists() && outputFile.length() > 44L) { "لم يتم إنشاء ملف WAV صالح" }
         val exactInputTrack = requireNotNull(inputTrack) { "تعذر إثبات مسار الصوت المستخدم" }
-
         return DetailedSttAudioPreparation(
             profile = SttAudioProfile(
                 file = outputFile,
@@ -274,12 +281,9 @@ object SttAudioPreparer {
                 bitsPerSample = 16,
                 sourceStartUs = sourceStartUs,
                 sourceEndUs = sourceEndUs,
-                durationMs = (monoFramesWritten * 1_000L / outputSampleRate),
+                durationMs = monoFramesWritten * 1_000L / outputSampleRate,
             ),
-            provenance = SttAudioPreparationProvenance(
-                inputTrack = exactInputTrack,
-                pcmFrameCount = monoFramesWritten,
-            ),
+            provenance = SttAudioPreparationProvenance(exactInputTrack, monoFramesWritten),
         )
     }
 
@@ -299,7 +303,6 @@ object SttAudioPreparer {
         }
         val frameSize = bytesPerSample * channelCount
         if (frameSize <= 0 || size < frameSize) return 0
-
         val frames = size / frameSize
         val output = ByteArray(frames * 2)
         val input = source.duplicate().apply {
@@ -307,17 +310,15 @@ object SttAudioPreparer {
             limit(offset + frames * frameSize)
             order(ByteOrder.LITTLE_ENDIAN)
         }
-
         var outIndex = 0
         repeat(frames) {
             var sum = 0.0
             repeat(channelCount) {
-                val normalized = when (pcmEncoding) {
+                sum += when (pcmEncoding) {
                     AudioFormat.ENCODING_PCM_16BIT -> input.short.toDouble() / 32768.0
                     AudioFormat.ENCODING_PCM_FLOAT -> input.float.toDouble().coerceIn(-1.0, 1.0)
                     else -> 0.0
                 }
-                sum += normalized
             }
             val mono = (sum / channelCount).coerceIn(-1.0, 1.0)
             val sample = (mono * 32767.0).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
@@ -336,7 +337,6 @@ object SttAudioPreparer {
         val byteRate = sampleRateHz * channels * bitsPerSample / 8
         val blockAlign = channels * bitsPerSample / 8
         val riffSize = pcmBytes + 36L
-
         return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray(Charsets.US_ASCII))
             putInt(riffSize.toInt())
@@ -363,4 +363,3 @@ object SttAudioPreparer {
         return -1
     }
 }
-
