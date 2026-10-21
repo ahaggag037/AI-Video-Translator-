@@ -1,0 +1,163 @@
+name: Bootstrap First Signed Release APK
+
+on:
+  push:
+    branches:
+      - build/final-signed-release
+    paths:
+      - .github/workflows/bootstrap-first-release-signing.yml
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Generate first release signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGN_PASS="$(openssl rand -hex 32)"
+          BACKUP_PASS="$(openssl rand -hex 32)"
+          SIGN_ALIAS="ai-video-translator-release"
+          echo "::add-mask::$SIGN_PASS"
+          echo "::add-mask::$BACKUP_PASS"
+          echo "AI_TRANSLATOR_RELEASE_STORE_FILE=release-keystore.p12" >> "$GITHUB_ENV"
+          echo "AI_TRANSLATOR_RELEASE_STORE_PASSWORD=$SIGN_PASS" >> "$GITHUB_ENV"
+          echo "AI_TRANSLATOR_RELEASE_KEY_ALIAS=$SIGN_ALIAS" >> "$GITHUB_ENV"
+          echo "AI_TRANSLATOR_RELEASE_KEY_PASSWORD=$SIGN_PASS" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_BACKUP_PASS=$BACKUP_PASS" >> "$GITHUB_ENV"
+          keytool -genkeypair \
+            -keystore release-keystore.p12 \
+            -storetype PKCS12 \
+            -storepass "$SIGN_PASS" \
+            -keypass "$SIGN_PASS" \
+            -alias "$SIGN_ALIAS" \
+            -keyalg RSA \
+            -keysize 4096 \
+            -sigalg SHA256withRSA \
+            -validity 10000 \
+            -dname "CN=AI Video Translator Release,O=AI Video Translator,C=EG" \
+            -noprompt
+          chmod 600 release-keystore.p12
+          {
+            echo "AI_TRANSLATOR_RELEASE_STORE_FILE=release-keystore.p12"
+            echo "AI_TRANSLATOR_RELEASE_STORE_PASSWORD=$SIGN_PASS"
+            echo "AI_TRANSLATOR_RELEASE_KEY_ALIAS=$SIGN_ALIAS"
+            echo "AI_TRANSLATOR_RELEASE_KEY_PASSWORD=$SIGN_PASS"
+          } > release-signing-credentials.txt
+          chmod 600 release-signing-credentials.txt
+
+      - name: Unit tests
+        run: gradle --stacktrace testDebugUnitTest
+
+      - name: Lint
+        run: gradle --stacktrace lintDebug
+
+      - name: Build signed release APK
+        run: gradle --stacktrace :app:assembleRelease
+
+      - name: Verify release APK and capture identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" | tee signing-certificate.txt
+          sha256sum "$APK" | tee app-release.apk.sha256
+          keytool -list -v \
+            -keystore release-keystore.p12 \
+            -storetype PKCS12 \
+            -storepass "$AI_TRANSLATOR_RELEASE_STORE_PASSWORD" \
+            -alias "$AI_TRANSLATOR_RELEASE_KEY_ALIAS" >> signing-certificate.txt
+          mkdir -p signed-release-public
+          cp "$APK" signed-release-public/AI-Video-Translator-Final-Signed-Release.apk
+          cp app-release.apk.sha256 signed-release-public/AI-Video-Translator-Final-Signed-Release.apk.sha256
+          cp signing-certificate.txt signed-release-public/signing-certificate.txt
+          {
+            echo "commit=$GITHUB_SHA"
+            echo "branch=$GITHUB_REF_NAME"
+            echo "workflow_run=$GITHUB_RUN_ID"
+            echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > signed-release-public/release-manifest.txt
+
+      - name: Encrypt release signing backup for handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > bootstrap-public.pem <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAvqzxbt9EZJKuFCLpjd67
+          8g/L7LVghVaTXYYecKkJGcLJaCOsf9ZCjzMZq9NAc9+D7o7eSUXt8xx0PEKFifZT
+          CzPbcv6K2sVV1Nb12HblOnzwAuHsjPxN0WIYSDb6VnxFzPd0h5Ew90gbwL9R+iAP
+          w5nu6NVXeiqR8UI13+vxxqQ97G2Ebv/r/YtlMqtU6mQB0T/tQzebJEuD1YrJr/Kf
+          J/l1EmXV7tlqt0mD0lf5IdrlMaob6TIO3YVtAXmzhaBbTNv+Uq1moLj0A2SbZIVO
+          PjuDfKnRanfCEsSZcP3yB/TVjg1Mw+42aVZV7R85zGTPiqI/eQvbg01OzOtC4lNp
+          NNkksaxgDn7j24wPH0NVRsD4EmCuHouoCgVkgkO6StbjJV5CnrRh2gPWV74J4qsl
+          6Oj9oPRyCvC5xzws7MwpaBjpPgpjQT12luitD2hEtF4ExcrE5eqyXD4LJyQfHxQx
+          QdO2DpequTueYumbJJmBkLawnJPzTdfG6eSC6Zk8S7rFAgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+          tar -czf release-signing-backup.tar.gz \
+            release-keystore.p12 \
+            release-signing-credentials.txt \
+            signing-certificate.txt \
+            app-release.apk.sha256
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+            -in release-signing-backup.tar.gz \
+            -out release-signing-backup.tar.gz.enc \
+            -pass pass:"$BOOTSTRAP_BACKUP_PASS"
+          printf '%s' "$BOOTSTRAP_BACKUP_PASS" | \
+            openssl pkeyutl -encrypt \
+              -pubin \
+              -inkey bootstrap-public.pem \
+              -pkeyopt rsa_padding_mode:oaep \
+              -pkeyopt rsa_oaep_md:sha256 \
+              -pkeyopt rsa_mgf1_md:sha256 \
+              -out release-signing-backup-passphrase.enc
+          mkdir -p signing-backup-encrypted
+          mv release-signing-backup.tar.gz.enc signing-backup-encrypted/
+          mv release-signing-backup-passphrase.enc signing-backup-encrypted/
+          sha256sum signing-backup-encrypted/* > signing-backup-encrypted/SHA256SUMS.txt
+          rm -f release-signing-backup.tar.gz release-signing-credentials.txt release-keystore.p12 bootstrap-public.pem
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-video-translator-final-signed-release-apk-bootstrap
+          path: signed-release-public/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload encrypted signing backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-video-translator-release-signing-backup-encrypted
+          path: signing-backup-encrypted/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove sensitive plaintext remnants
+        if: always()
+        run: |
+          rm -f release-keystore.p12 release-signing-credentials.txt release-signing-backup.tar.gz bootstrap-public.pem
