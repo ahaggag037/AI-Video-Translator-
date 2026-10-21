@@ -21,6 +21,8 @@ internal enum class ProductRoute {
     EXPORT_CENTER,
     EXPORT_PROGRESS,
     RESULT,
+    SETTINGS,
+    DIAGNOSTICS,
 }
 
 internal sealed interface ProductNavigationEvent {
@@ -45,6 +47,9 @@ internal sealed interface ProductNavigationEvent {
     data object OpenSourceRecovery : ProductNavigationEvent
     data object OpenLocalRecovery : ProductNavigationEvent
     data object BackHomeFromRecovery : ProductNavigationEvent
+    data object OpenSettings : ProductNavigationEvent
+    data object OpenDiagnostics : ProductNavigationEvent
+    data object BackHomeFromSecondary : ProductNavigationEvent
 }
 
 internal class ProductNavigator(
@@ -80,6 +85,9 @@ internal class ProductNavigator(
             ProductNavigationEvent.OpenSourceRecovery -> ProductRoute.SOURCE_RECOVERY
             ProductNavigationEvent.OpenLocalRecovery -> ProductRoute.LOCAL_RECOVERY
             ProductNavigationEvent.BackHomeFromRecovery -> ProductRoute.HOME
+            ProductNavigationEvent.OpenSettings -> ProductRoute.SETTINGS
+            ProductNavigationEvent.OpenDiagnostics -> ProductRoute.DIAGNOSTICS
+            ProductNavigationEvent.BackHomeFromSecondary -> ProductRoute.HOME
         }
     }
 }
