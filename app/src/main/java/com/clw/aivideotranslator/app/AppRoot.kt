@@ -41,6 +41,11 @@ import com.clw.aivideotranslator.ui.recovery.ProviderRecoveryScreen
 import com.clw.aivideotranslator.ui.recovery.SourceRecoveryPhase
 import com.clw.aivideotranslator.ui.recovery.SourceRecoveryPresentation
 import com.clw.aivideotranslator.ui.recovery.SourceRecoveryScreen
+import com.clw.aivideotranslator.ui.settings.DiagnosticsPresentation
+import com.clw.aivideotranslator.ui.settings.DiagnosticsScreen
+import com.clw.aivideotranslator.ui.settings.SettingsPresentation
+import com.clw.aivideotranslator.ui.settings.SettingsScreen
+import com.clw.aivideotranslator.ui.settings.AppearancePreference
 import com.clw.aivideotranslator.ui.source.SourceReviewPresentation
 import com.clw.aivideotranslator.ui.source.SourceReviewScreen
 import com.clw.aivideotranslator.ui.theme.QuietProTheme
@@ -159,6 +164,29 @@ internal fun AppRoot(
     onShareResultOutput: (OutputKind) -> Unit = {},
     onLocateResultOutput: (OutputKind) -> Unit = {},
     onRetryResultOutput: (OutputKind) -> Unit = {},
+    settingsPresentation: SettingsPresentation = SettingsPresentation(
+        appearance = AppearancePreference.SYSTEM,
+        aiCredentialConfigured = false,
+        cacheSummary = "لم يتم القياس بعد",
+    ),
+    onBackFromSettings: () -> Unit = {},
+    onOpenAppearanceSettings: () -> Unit = {},
+    onOpenAiCredentialSettings: () -> Unit = {},
+    onOpenDefaultStyleSettings: () -> Unit = {},
+    onClearCacheSettings: () -> Unit = {},
+    onClearProjectSettings: () -> Unit = {},
+    onOpenDiagnostics: () -> Unit = {},
+    diagnosticsPresentation: DiagnosticsPresentation = DiagnosticsPresentation(
+        versionName = "",
+        versionCode = 0,
+        buildType = "",
+        sessionStateLabel = "غير معروف",
+        sourceStateLabel = "غير معروف",
+        providerStateLabel = "غير معروف",
+    ),
+    onBackFromDiagnostics: () -> Unit = {},
+    onToggleAdvancedDiagnostics: () -> Unit = {},
+    onOpenLicenses: () -> Unit = {},
     showDeveloperTools: Boolean = false,
     onOpenDeveloperTools: () -> Unit = {},
 ) {
@@ -314,6 +342,24 @@ internal fun AppRoot(
                         onRetry = onRetryResultOutput,
                     )
                 } ?: MissingRouteState("تعذر تحميل نتيجة التصدير")
+
+                ProductRoute.SETTINGS -> SettingsScreen(
+                    presentation = settingsPresentation,
+                    onBack = onBackFromSettings,
+                    onAppearance = onOpenAppearanceSettings,
+                    onAiCredential = onOpenAiCredentialSettings,
+                    onDefaultStyle = onOpenDefaultStyleSettings,
+                    onClearCache = onClearCacheSettings,
+                    onClearProject = onClearProjectSettings,
+                    onAboutDiagnostics = onOpenDiagnostics,
+                )
+
+                ProductRoute.DIAGNOSTICS -> DiagnosticsScreen(
+                    presentation = diagnosticsPresentation,
+                    onBack = onBackFromDiagnostics,
+                    onToggleAdvanced = onToggleAdvancedDiagnostics,
+                    onOpenLicenses = onOpenLicenses,
+                )
             }
         }
     }
