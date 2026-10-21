@@ -44,6 +44,20 @@ class SourceSelectionViewModelTest {
         assertTrue(owner.snapshot.value.state is CandidateSourceState.Activated)
     }
 
+    @Test fun activationPreparationFailureReturnsReadyAndPreservesMetadata() {
+        val owner = SourceSelectionViewModel()
+        val ticket = owner.select("content://video/a")
+        val metadata = metadata("a.mp4")
+        owner.completeProbe(ticket, Result.success(metadata))
+        val request = requireNotNull(owner.requestActivation())
+
+        assertTrue(owner.failActivation(request.ticket, "تعذر تثبيت إذن قراءة الفيديو"))
+
+        val state = owner.snapshot.value.state as CandidateSourceState.Ready
+        assertEquals("تعذر تثبيت إذن قراءة الفيديو", state.lastActivationError)
+        assertEquals(metadata, owner.snapshot.value.metadata)
+    }
+
     @Test fun staleProbeDoesNotRepublishSupersededMetadata() {
         val owner = SourceSelectionViewModel()
         val oldTicket = owner.select("content://video/old")
