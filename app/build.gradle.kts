@@ -26,8 +26,8 @@ android {
         applicationId = "com.clw.aivideotranslator"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.1.4-p0f-hardburn"
+        versionCode = 7
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
