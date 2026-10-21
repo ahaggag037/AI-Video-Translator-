@@ -5,6 +5,7 @@ import okio.Buffer
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
@@ -61,6 +62,13 @@ class NvidiaSttWireContractTest {
         } finally {
             wav.delete()
         }
+    }
+
+    @Test fun httpClientDisablesRedirectsAndConnectionRetry() {
+        val client = NvidiaSttClient.buildHttpClient()
+
+        assertFalse(client.followRedirects)
+        assertFalse(client.retryOnConnectionFailure)
     }
 
     private fun RequestBody.utf8(): String {
