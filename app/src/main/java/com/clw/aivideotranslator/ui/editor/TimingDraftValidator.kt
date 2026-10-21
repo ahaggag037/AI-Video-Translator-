@@ -6,6 +6,8 @@ internal data class TimingDraft(
 )
 
 internal enum class TimingDraftError {
+    START_INVALID,
+    END_INVALID,
     NEGATIVE_START,
     START_NOT_BEFORE_END,
     AFTER_VIDEO_END,
