@@ -1,0 +1,31 @@
+name: Internal Product Media Patch
+
+on:
+  push:
+    branches: [ 'build/path-a-recovery-correction' ]
+    paths: [ '.github/product-media-patch-request' ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor == 'ahaggag037'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply asserted product media patch
+        run: python3 tools/apply_product_media_patch.py
+      - name: Commit media wiring
+        run: |
+          if git diff --quiet; then
+            echo "No product media changes were needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/clw/aivideotranslator/app/ProductAppHostStyleBridge.kt
+          git commit -m "product: wire committed preview and persistent export"
+          git push origin HEAD:build/path-a-recovery-correction
