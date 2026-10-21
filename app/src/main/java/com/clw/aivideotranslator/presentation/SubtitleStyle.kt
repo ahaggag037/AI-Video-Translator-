@@ -64,7 +64,7 @@ internal data class SubtitleStyle(
         require(offsetYFraction in -1f..1f)
         require(safeMarginFraction in 0f..0.5f)
         require(maxWidthFraction > 0f && maxWidthFraction <= 1f)
-        require(maxLines >= 1)
+        require(maxLines in 1..2) { "V1 authored subtitle contract supports one or two lines" }
     }
 }
 
