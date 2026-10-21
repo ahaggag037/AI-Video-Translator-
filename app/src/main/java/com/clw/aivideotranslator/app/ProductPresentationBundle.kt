@@ -14,7 +14,7 @@ import com.clw.aivideotranslator.presentation.LayoutStatus
 import com.clw.aivideotranslator.subtitle.android.LivePresentationRasterSnapshot
 import com.clw.aivideotranslator.subtitle.android.LivePresentationRasterSnapshotFactory
 
-data class ProductPresentationBundle(
+internal data class ProductPresentationBundle(
     val sourceUri: Uri,
     val durationMs: Long,
     val cues: List<ArabicSubtitleCue>,
