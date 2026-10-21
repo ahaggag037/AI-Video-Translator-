@@ -15,8 +15,9 @@ internal object TimingEditorProjection {
         sourceAvailable: Boolean,
     ): TimingEditorPresentation {
         val visible = state.visibleInterval(sourceInterval)
-        val startField = formatTimecodeUs(visible.startUs)
-        val endField = formatTimecodeUs(visible.endUs)
+        val rawFields = state.pendingFieldDraft
+        val startField = rawFields?.startText ?: formatTimecodeUs(visible.startUs)
+        val endField = rawFields?.endText ?: formatTimecodeUs(visible.endUs)
         val validation = TimingDraftValidator.validate(
             TimingDraft(
                 startText = startField,
@@ -29,7 +30,7 @@ internal object TimingEditorProjection {
         return TimingEditorPresentation(
             startField = startField,
             endField = endField,
-            dirty = state.pendingDraft != null,
+            dirty = state.pendingDraft != null || rawFields != null,
             validation = validation,
             sourceAvailable = sourceAvailable,
         )
