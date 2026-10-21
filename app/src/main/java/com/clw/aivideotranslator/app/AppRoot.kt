@@ -35,7 +35,12 @@ import com.clw.aivideotranslator.ui.preview.FullscreenPreviewScreen
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentation
 import com.clw.aivideotranslator.ui.processing.ProcessingScreen
 import com.clw.aivideotranslator.ui.processing.ProcessingStage
+import com.clw.aivideotranslator.ui.recovery.LocalRecoveryPhase
+import com.clw.aivideotranslator.ui.recovery.LocalRecoveryScreen
 import com.clw.aivideotranslator.ui.recovery.ProviderRecoveryScreen
+import com.clw.aivideotranslator.ui.recovery.SourceRecoveryPhase
+import com.clw.aivideotranslator.ui.recovery.SourceRecoveryPresentation
+import com.clw.aivideotranslator.ui.recovery.SourceRecoveryScreen
 import com.clw.aivideotranslator.ui.source.SourceReviewPresentation
 import com.clw.aivideotranslator.ui.source.SourceReviewScreen
 import com.clw.aivideotranslator.ui.theme.QuietProTheme
@@ -69,6 +74,21 @@ internal fun AppRoot(
     onKeepProviderStateAndReturn: () -> Unit = {},
     onConfirmFreshProviderAttempt: () -> Unit = {},
     onOpenProviderRecoveryDetails: () -> Unit = {},
+    sourceRecoveryPresentation: SourceRecoveryPresentation = SourceRecoveryPresentation(
+        phase = SourceRecoveryPhase.MISSING_NO_TEXT,
+        textOnlyAvailable = false,
+        srtExportAvailable = false,
+    ),
+    onBackHomeFromSourceRecovery: () -> Unit = {},
+    onContinueTextOnly: () -> Unit = {},
+    onRelinkSource: () -> Unit = {},
+    onSourceRecoveryExportSrt: () -> Unit = {},
+    localRecoveryPhase: LocalRecoveryPhase = LocalRecoveryPhase.BASE,
+    onBackHomeFromLocalRecovery: () -> Unit = {},
+    onOpenLocalDiagnostics: () -> Unit = {},
+    onRequestCleanStart: () -> Unit = {},
+    onConfirmCleanStart: () -> Unit = {},
+    onCancelCleanStart: () -> Unit = {},
     editorTextPresentation: EditorTextPresentation = EditorTextPresentation(
         sourceText = "",
         targetText = "",
@@ -180,6 +200,23 @@ internal fun AppRoot(
                     onKeepStateAndReturn = onKeepProviderStateAndReturn,
                     onConfirmFreshAttempt = onConfirmFreshProviderAttempt,
                     onOpenDetails = onOpenProviderRecoveryDetails,
+                )
+
+                ProductRoute.SOURCE_RECOVERY -> SourceRecoveryScreen(
+                    presentation = sourceRecoveryPresentation,
+                    onBackHome = onBackHomeFromSourceRecovery,
+                    onContinueTextOnly = onContinueTextOnly,
+                    onRelinkSource = onRelinkSource,
+                    onExportSrt = onSourceRecoveryExportSrt,
+                )
+
+                ProductRoute.LOCAL_RECOVERY -> LocalRecoveryScreen(
+                    phase = localRecoveryPhase,
+                    onBackHome = onBackHomeFromLocalRecovery,
+                    onOpenDiagnostics = onOpenLocalDiagnostics,
+                    onRequestCleanStart = onRequestCleanStart,
+                    onConfirmCleanStart = onConfirmCleanStart,
+                    onCancelCleanStart = onCancelCleanStart,
                 )
 
                 ProductRoute.EDITOR_TEXT -> EditorTextScreen(
