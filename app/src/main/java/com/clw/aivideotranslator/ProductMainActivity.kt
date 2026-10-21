@@ -34,6 +34,7 @@ class ProductMainActivity : ComponentActivity() {
                 sourceSelectionViewModel = sourceSelectionViewModel,
                 editorTextStore = app.editorTextStates,
                 displayTimingStore = app.displayTimingStates,
+                credentialStore = app.aiCredentialStore,
             )
         }
     }
