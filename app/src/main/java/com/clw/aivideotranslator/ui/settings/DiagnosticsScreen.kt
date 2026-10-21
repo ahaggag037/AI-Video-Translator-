@@ -6,8 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -43,9 +41,7 @@ internal fun DiagnosticsScreen(
         topBar = {
             TopAppBar(
                 title = { Text("حول وتشخيص") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) { Text("رجوع") }
-                },
+                navigationIcon = { TextButton(onClick = onBack) { Text("رجوع") } },
             )
         },
     ) { contentPadding ->
@@ -53,7 +49,6 @@ internal fun DiagnosticsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -68,7 +63,6 @@ internal fun DiagnosticsScreen(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                 )
-
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -78,7 +72,6 @@ internal fun DiagnosticsScreen(
                         Text("نوع البناء: ${presentation.buildType}")
                     }
                 }
-
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -90,24 +83,22 @@ internal fun DiagnosticsScreen(
                         Text("المزود: ${presentation.providerStateLabel}")
                     }
                 }
-
                 TextButton(onClick = onToggleAdvanced) {
                     Text(if (presentation.advancedExpanded) "إخفاء التشخيص المتقدم" else "عرض التشخيص المتقدم")
                 }
-
                 if (presentation.advancedExpanded) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            text = "يعرض هذا القسم حالات تقنية مختصرة فقط. لا يعرض API Key أو نص الترجمة أو مسار ملف الفيديو أو محتوى خاص.",
+                            text = "لا يعرض هذا القسم API Key أو نص الترجمة أو عنوان ملف الفيديو أو أي محتوى خاص.",
                             modifier = Modifier.padding(16.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
-
-                TextButton(onClick = onOpenLicenses) {
-                    Text("التراخيص")
-                }
+                Text(
+                    text = "الخط المضمّن Noto Sans Arabic مرخّص وفق SIL Open Font License 1.1، ونص الترخيص مضمّن داخل التطبيق.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
