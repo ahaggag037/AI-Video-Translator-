@@ -13,22 +13,27 @@ import java.util.Base64
 import java.util.Properties
 
 internal object SubtitleStyleDefaults {
+    /**
+     * Backward-compatible authored default for the already-qualified raster path. The identifiers
+     * describe the bundled asset actually loaded by SubtitleFonts; spatial defaults reproduce the
+     * legacy bottom-center, 6% safe-area layout and black box when authored styling is introduced.
+     */
     val PROJECT = SubtitleStyle(
-        fontFamilyId = "noto-sans-arabic",
-        fontWeight = 600,
+        fontFamilyId = "x003-noto-sans-arabic-full-regular-2.012",
+        fontWeight = 400,
         fontSizeSp = 42f,
         lineHeightSp = 52f,
         textColorArgb = 0xFFFFFFFF,
         opacity = 1f,
         alignment = SubtitleTextAlignment.CENTER,
-        outlineWidthDp = 2f,
-        shadowEnabled = true,
-        backgroundEnabled = false,
+        outlineWidthDp = 0f,
+        shadowEnabled = false,
+        backgroundEnabled = true,
         anchor = SubtitleAnchor.BOTTOM_CENTER,
         offsetXFraction = 0f,
         offsetYFraction = 0f,
-        safeMarginFraction = 0.05f,
-        maxWidthFraction = 0.86f,
+        safeMarginFraction = 0.06f,
+        maxWidthFraction = 0.88f,
         maxLines = 2,
     )
 }
