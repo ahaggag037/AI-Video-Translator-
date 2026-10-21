@@ -29,8 +29,8 @@ class NvidiaSourceSnapshotFactoryTest {
         {
           "text": "Hello world.",
           "words": [
-            {"word":"Hello","start":0.10,"end":0.25,"confidence":0.9},
-            {"word":"world.","start":0.30,"end":0.80,"confidence":0.8}
+            {"word":"Hello","start_time":100,"end_time":250,"confidence":0.9},
+            {"word":"world.","start_time":300,"end_time":800,"confidence":0.8}
           ]
         }
     """.trimIndent()
