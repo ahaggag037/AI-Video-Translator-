@@ -51,6 +51,10 @@ import com.clw.aivideotranslator.session.DurableSttPhase
 import com.clw.aivideotranslator.session.DurableSttUiState
 import com.clw.aivideotranslator.session.DurableTranslationPhase
 import com.clw.aivideotranslator.session.TranslationSessionViewModel
+import com.clw.aivideotranslator.source.CandidateActivationOutcome
+import com.clw.aivideotranslator.source.CandidateRejectReason
+import com.clw.aivideotranslator.source.CandidateSourceState
+import com.clw.aivideotranslator.source.SourceSelectionViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -69,7 +73,9 @@ class MainActivity : ComponentActivity() {
                 planStore = app.translationRequestPlans,
             ),
         )[TranslationSessionViewModel::class.java]
-        setContent { App(sessionViewModel) }
+        val sourceSelectionViewModel =
+            ViewModelProvider(this)[SourceSelectionViewModel::class.java]
+        setContent { App(sessionViewModel, sourceSelectionViewModel) }
     }
 }
 
@@ -93,12 +99,16 @@ private sealed interface HomeState {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun App(sessionViewModel: TranslationSessionViewModel) {
+private fun App(
+    sessionViewModel: TranslationSessionViewModel,
+    sourceSelectionViewModel: SourceSelectionViewModel,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val durableSource by sessionViewModel.durableSource.collectAsState()
     val durableStt by sessionViewModel.stt.collectAsState()
     val durableTranslation by sessionViewModel.translation.collectAsState()
+    val candidateSelection by sourceSelectionViewModel.snapshot.collectAsState()
     var state: HomeState by remember { mutableStateOf(HomeState.Empty) }
     var player: MediaPlayer? by remember { mutableStateOf(null) }
     var nvidiaApiKey by remember { mutableStateOf("") }
@@ -110,8 +120,30 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
         }
     }
 
-    LaunchedEffect(durableSource.phase, durableSource.sessionId, durableSource.contentUri) {
+    LaunchedEffect(
+        durableSource.phase,
+        durableSource.sessionId,
+        durableSource.contentUri,
+        candidateSelection.state,
+    ) {
+        when (sourceSelectionViewModel.reconcileDurable(durableSource)) {
+            CandidateActivationOutcome.ACTIVATED -> Unit
+            CandidateActivationOutcome.FAILED -> return@LaunchedEffect
+            CandidateActivationOutcome.IGNORED,
+            CandidateActivationOutcome.WAITING -> Unit
+        }
+
+        val candidateIsStillTransient = when (sourceSelectionViewModel.snapshot.value.state) {
+            CandidateSourceState.Idle,
+            is CandidateSourceState.Activated -> false
+            is CandidateSourceState.Probing,
+            is CandidateSourceState.Ready,
+            is CandidateSourceState.Rejected,
+            is CandidateSourceState.Activating -> true
+        }
+        if (candidateIsStillTransient) return@LaunchedEffect
         if (durableSource.phase != DurableSourcePhase.BOUND) return@LaunchedEffect
+
         val storedUri = durableSource.contentUri ?: return@LaunchedEffect
         val uri = runCatching { Uri.parse(storedUri) }.getOrNull() ?: return@LaunchedEffect
         val current = state
@@ -119,10 +151,14 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
         state = HomeState.Loading
         val metadata = withContext(Dispatchers.IO) { VideoProbe.read(context, uri) }
         val latest = sessionViewModel.durableSource.value
-        if (latest.phase != DurableSourcePhase.BOUND || latest.contentUri != storedUri) return@LaunchedEffect
+        if (latest.phase != DurableSourcePhase.BOUND || latest.contentUri != storedUri) {
+            return@LaunchedEffect
+        }
         state = metadata.fold(
             onSuccess = { HomeState.Ready(uri, it) },
-            onFailure = { HomeState.Error("تعذر إعادة فتح الفيديو المحفوظ. اختر المصدر مرة أخرى.") },
+            onFailure = {
+                HomeState.Error("تعذر إعادة فتح الفيديو المحفوظ. اختر المصدر مرة أخرى.")
+            },
         )
     }
 
@@ -162,8 +198,10 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
             state = current.copy(
                 sampleState = result.fold(
                     onSuccess = { SampleState.Ready(it) },
-                    onFailure = { SampleState.Error(it.message ?: "تعذر استخراج عينة الصوت") },
-                )
+                    onFailure = {
+                        SampleState.Error(it.message ?: "تعذر استخراج عينة الصوت")
+                    },
+                ),
             )
         }
     }
@@ -174,11 +212,47 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
             Toast.makeText(context, "أدخل NVIDIA API Key أولًا", Toast.LENGTH_SHORT).show()
             return
         }
-        if (durableSource.phase != DurableSourcePhase.BOUND || durableSource.contentUri != ready.uri.toString()) {
-            Toast.makeText(context, "انتظر اكتمال حفظ جلسة الفيديو أولًا", Toast.LENGTH_SHORT).show()
+        if (
+            durableSource.phase != DurableSourcePhase.BOUND ||
+            durableSource.contentUri != ready.uri.toString()
+        ) {
+            Toast.makeText(context, "انتظر اكتمال حفظ جلسة الفيديو أولًا", Toast.LENGTH_SHORT)
+                .show()
             return
         }
         sessionViewModel.runStt(apiKeySnapshot)
+    }
+
+    fun adoptCandidate(ready: HomeState.Ready) {
+        val request = sourceSelectionViewModel.requestActivation() ?: return
+        if (request.contentUri != ready.uri.toString()) {
+            sourceSelectionViewModel.failActivation(
+                request.ticket,
+                "تغيّر الفيديو المرشح. أعد اختيار الفيديو قبل الاعتماد.",
+            )
+            return
+        }
+
+        val permissionResult = runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                ready.uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        if (permissionResult.isFailure) {
+            sourceSelectionViewModel.failActivation(
+                request.ticket,
+                "تعذر تثبيت إذن قراءة الفيديو. اختر الفيديو مرة أخرى.",
+            )
+            Toast.makeText(
+                context,
+                "تعذر تثبيت إذن قراءة الفيديو",
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+
+        sessionViewModel.selectNewSource(request.contentUri)
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -186,24 +260,30 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
         player?.release()
         player = null
         state = HomeState.Loading
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        sessionViewModel.selectNewSource(uri.toString())
+        val ticket = sourceSelectionViewModel.select(uri.toString())
         scope.launch {
             val metadata = withContext(Dispatchers.IO) { VideoProbe.read(context, uri) }
-            val latest = sessionViewModel.durableSource.value
-            if (latest.contentUri != uri.toString()) return@launch
-            state = metadata.fold(
-                onSuccess = { HomeState.Ready(uri, it) },
-                onFailure = { HomeState.Error(it.message ?: "تعذر قراءة بيانات الفيديو") },
-            )
+            if (!sourceSelectionViewModel.completeProbe(ticket, metadata)) return@launch
+
+            val snapshot = sourceSelectionViewModel.snapshot.value
+            state = when (val candidate = snapshot.state) {
+                is CandidateSourceState.Ready -> {
+                    val verifiedMetadata = snapshot.metadata
+                    if (verifiedMetadata != null) {
+                        HomeState.Ready(uri, verifiedMetadata)
+                    } else {
+                        HomeState.Error("اكتمل فحص الفيديو دون بيانات قابلة للاعتماد.")
+                    }
+                }
+                is CandidateSourceState.Rejected -> HomeState.Error(candidateRejectMessage(candidate))
+                else -> HomeState.Error("تعذر إكمال فحص الفيديو المرشح بأمان.")
+            }
         }
     }
 
     MaterialTheme {
         Scaffold(
-            topBar = { TopAppBar(title = { Text("AI Video Translator") }) }
+            topBar = { TopAppBar(title = { Text("AI Video Translator") }) },
         ) { padding ->
             Column(
                 modifier = Modifier
@@ -211,7 +291,7 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
                     .padding(padding)
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text(
                     "الترجمة والترجمة النصية — جلسة قابلة للاستئناف",
@@ -219,7 +299,7 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "اختيار الفيديو وSTT والترجمة المقبولة مرتبطة الآن بجلسة دائمة. الطلبات غير المؤكدة لا يعاد إرسالها تلقائيًا بعد إغلاق التطبيق."
+                    "اختيار الفيديو يبدأ بفحص مرشح مؤقت. لا تُستبدل الجلسة الدائمة إلا بعد اعتمادك الصريح للفيديو. الطلبات غير المؤكدة لا يعاد إرسالها تلقائيًا بعد إغلاق التطبيق.",
                 )
 
                 Button(
@@ -236,52 +316,74 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
                 DurableSessionCard(durableSource, durableStt)
 
                 when (val s = state) {
-                    HomeState.Empty -> InfoCard("الحالة", "اختر فيديو لبدء جلسة جديدة، أو انتظر استرداد الجلسة السابقة إن وجدت.")
-                    HomeState.Loading -> InfoCard("الحالة", "جارٍ فتح معلومات الفيديو وربط الجلسة…")
-                    is HomeState.Error -> InfoCard("تعذر فتح الفيديو", s.message)
+                    HomeState.Empty -> InfoCard(
+                        "الحالة",
+                        "اختر فيديو لبدء جلسة جديدة، أو انتظر استرداد الجلسة السابقة إن وجدت.",
+                    )
+                    HomeState.Loading -> InfoCard(
+                        "الحالة",
+                        "جارٍ فحص الفيديو والصوت قبل اعتماد المصدر. الجلسة الحالية لم تُستبدل بعد.",
+                    )
+                    is HomeState.Error -> InfoCard("تعذر فحص الفيديو", s.message)
                     is HomeState.Ready -> {
                         VideoCard(s.metadata)
-                        SampleCard(
-                            state = s.sampleState,
-                            onExtract = { extractSample(s) },
-                            onPlay = ::playSample,
-                        )
                         val sourceReady = durableSource.phase == DurableSourcePhase.BOUND &&
                             durableSource.contentUri == s.uri.toString()
-                        SttCard(
-                            state = durableStt,
-                            apiKey = nvidiaApiKey,
-                            sourceReady = sourceReady,
-                            onApiKeyChange = { nvidiaApiKey = it },
-                            onRun = { runNvidiaStt(s) },
-                        )
 
-                        val liveSttReady = durableStt.phase == DurableSttPhase.LIVE_SUCCESS &&
-                            durableStt.legacyResult != null && sourceReady
-                        if (liveSttReady || durableTranslation.phase != DurableTranslationPhase.IDLE) {
-                            DurableTranslationCard(
-                                state = durableTranslation,
-                                apiKey = nvidiaApiKey,
-                                canTranslate = liveSttReady,
-                                onTranslate = { sessionViewModel.runTranslation(nvidiaApiKey.trim()) },
-                                sourceUri = s.uri,
-                                videoDurationMs = s.metadata.durationMs ?: SubtitlePipeline.SAMPLE_END_MS,
-                                sampleStartMs = 0L,
+                        if (!sourceReady) {
+                            CandidateActivationCard(
+                                state = candidateSelection.state,
+                                onAdopt = { adoptCandidate(s) },
                             )
                         }
 
-                        if (durableStt.phase == DurableSttPhase.RECOVERED) {
-                            InfoCard(
-                                "تم استرداد STT",
-                                "تم استرداد النص المقبول دون طلب جديد. إذا وُجدت ترجمات محفوظة فستظهر كنص فقط؛ لن نعيد إنشاء توقيت كلمات قديم من التخمين قبل إغلاق X001.",
+                        if (sourceReady) {
+                            SampleCard(
+                                state = s.sampleState,
+                                onExtract = { extractSample(s) },
+                                onPlay = ::playSample,
                             )
+                            SttCard(
+                                state = durableStt,
+                                apiKey = nvidiaApiKey,
+                                sourceReady = true,
+                                onApiKeyChange = { nvidiaApiKey = it },
+                                onRun = { runNvidiaStt(s) },
+                            )
+
+                            val liveSttReady = durableStt.phase == DurableSttPhase.LIVE_SUCCESS &&
+                                durableStt.legacyResult != null
+                            if (
+                                liveSttReady ||
+                                durableTranslation.phase != DurableTranslationPhase.IDLE
+                            ) {
+                                DurableTranslationCard(
+                                    state = durableTranslation,
+                                    apiKey = nvidiaApiKey,
+                                    canTranslate = liveSttReady,
+                                    onTranslate = {
+                                        sessionViewModel.runTranslation(nvidiaApiKey.trim())
+                                    },
+                                    sourceUri = s.uri,
+                                    videoDurationMs = s.metadata.durationMs
+                                        ?: SubtitlePipeline.SAMPLE_END_MS,
+                                    sampleStartMs = 0L,
+                                )
+                            }
+
+                            if (durableStt.phase == DurableSttPhase.RECOVERED) {
+                                InfoCard(
+                                    "تم استرداد STT",
+                                    "تم استرداد النص المقبول دون طلب جديد. إذا وُجدت ترجمات محفوظة فستظهر كنص فقط؛ لن نعيد إنشاء توقيت كلمات قديم من التخمين قبل إغلاق X001.",
+                                )
+                            }
                         }
                     }
                 }
 
                 InfoCard(
                     "الخصوصية والاسترداد",
-                    "مفتاح NVIDIA يبقى في ذاكرة الشاشة فقط ولا يُكتب إلى ملفات الجلسة. تحفظ الجلسة هويات المصدر ونتائج STT وخطط/نتائج الترجمة اللازمة للاسترداد، لا الاستجابات الخام من المزود."
+                    "مفتاح NVIDIA يبقى في ذاكرة الشاشة فقط ولا يُكتب إلى ملفات الجلسة. تحفظ الجلسة هويات المصدر ونتائج STT وخطط/نتائج الترجمة اللازمة للاسترداد، لا الاستجابات الخام من المزود.",
                 )
             }
         }
@@ -289,23 +391,73 @@ private fun App(sessionViewModel: TranslationSessionViewModel) {
 }
 
 @Composable
+private fun CandidateActivationCard(
+    state: CandidateSourceState,
+    onAdopt: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            when (state) {
+                is CandidateSourceState.Ready -> {
+                    Text(
+                        "المصدر جاهز للاعتماد",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text("تم فحص الفيديو والصوت. لم تُستبدل الجلسة الحالية بعد.")
+                    state.lastActivationError?.let { Text(it) }
+                    Button(onClick = onAdopt, modifier = Modifier.fillMaxWidth()) {
+                        Text("اعتماد هذا الفيديو")
+                    }
+                }
+                is CandidateSourceState.Activating -> {
+                    Text(
+                        "جارٍ اعتماد المصدر",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text("يتم الآن حفظ هوية المصدر وربطه بالجلسة الدائمة.")
+                    Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                        Text("جارٍ الاعتماد…")
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+}
+
+private fun candidateRejectMessage(state: CandidateSourceState.Rejected): String = when (state.reason) {
+    CandidateRejectReason.NO_AUDIO -> "الفيديو لا يحتوي على مسار صوت صالح للترجمة."
+    CandidateRejectReason.ACCESS_LIMITED -> "لا يملك التطبيق وصولًا كافيًا لقراءة هذا الفيديو."
+    CandidateRejectReason.INVALID -> "الملف المختار ليس مصدر فيديو صالحًا."
+    CandidateRejectReason.PROBE_FAILED -> state.detail ?: "تعذر فحص الفيديو المختار."
+}
+
+@Composable
 private fun DurableSessionCard(source: DurableSourceUiState, stt: DurableSttUiState) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("حالة الجلسة", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "حالة الجلسة",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
             Text(
                 when (source.phase) {
                     DurableSourcePhase.NONE -> "لا توجد جلسة فيديو فعالة."
                     DurableSourcePhase.CAPTURING -> "جارٍ تثبيت هوية الفيديو وحفظ الجلسة…"
                     DurableSourcePhase.BOUND -> "✓ الفيديو مرتبط بجلسة دائمة ويمكن استئنافها."
                     DurableSourcePhase.FAILED -> sourceFailureMessage(source.failure)
-                }
+                },
             )
             when (stt.phase) {
                 DurableSttPhase.UNKNOWN_REMOTE_OUTCOME -> Text(
-                    "حالة STT غير مؤكدة بعد الإرسال. لن يعاد الطلب تلقائيًا لتجنب تكرار التنفيذ أو التكلفة."
+                    "حالة STT غير مؤكدة بعد الإرسال. لن يعاد الطلب تلقائيًا لتجنب تكرار التنفيذ أو التكلفة.",
                 )
-                DurableSttPhase.RECOVERED -> Text("✓ تم استرداد نص STT المقبول محليًا دون اتصال جديد.")
+                DurableSttPhase.RECOVERED -> Text(
+                    "✓ تم استرداد نص STT المقبول محليًا دون اتصال جديد.",
+                )
                 DurableSttPhase.LIVE_SUCCESS -> Text("✓ تم حفظ نتيجة STT وربطها بالجلسة.")
                 else -> Unit
             }
@@ -333,7 +485,11 @@ private fun sourceFailureMessage(failure: DurableSourceFailure?): String = when 
 private fun VideoCard(metadata: VideoMetadata) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("الفيديو المختار", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "الفيديو المختار",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
             KeyValue("الاسم", metadata.displayName)
             KeyValue("المدة", metadata.durationLabel)
             KeyValue("الدقة", metadata.resolutionLabel)
@@ -352,7 +508,11 @@ private fun SampleCard(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("عينة الصوت المحلية", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "عينة الصوت المحلية",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
             when (state) {
                 SampleState.Idle -> {
                     Text("يمكن استخراج أول دقيقة محليًا للاستماع والتحقق من الصوت دون شبكة.")
@@ -401,7 +561,11 @@ private fun SttCard(
     val busy = state.phase == DurableSttPhase.RUNNING
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("NVIDIA STT", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "NVIDIA STT",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
             Text(NvidiaSttClient.MODEL_LABEL)
             OutlinedTextField(
                 value = apiKey,
@@ -414,7 +578,9 @@ private fun SttCard(
             )
 
             when (state.phase) {
-                DurableSttPhase.IDLE -> Text("سيُحفظ intent قبل الإرسال؛ نجاح STT لن يعاد تلقائيًا بعد restart.")
+                DurableSttPhase.IDLE -> Text(
+                    "سيُحفظ intent قبل الإرسال؛ نجاح STT لن يعاد تلقائيًا بعد restart.",
+                )
                 DurableSttPhase.RUNNING -> Text("جارٍ تجهيز الصوت وإرسال طلب STT واحد…")
                 DurableSttPhase.LIVE_SUCCESS -> {
                     val result = state.legacyResult!!
@@ -430,18 +596,22 @@ private fun SttCard(
                     state.transcript?.let { Text(it) }
                 }
                 DurableSttPhase.UNKNOWN_REMOTE_OUTCOME -> Text(
-                    "لا يمكن تأكيد نتيجة الطلب السابق. لن يعيد التطبيق الإرسال تلقائيًا."
+                    "لا يمكن تأكيد نتيجة الطلب السابق. لن يعيد التطبيق الإرسال تلقائيًا.",
                 )
                 DurableSttPhase.FAILED -> Text(
                     when (state.failure) {
-                        com.clw.aivideotranslator.session.DurableSttFailure.NO_BOUND_SOURCE -> "اربط فيديو صالحًا بالجلسة أولًا."
-                        com.clw.aivideotranslator.session.DurableSttFailure.RESTORE -> "تعذر استرداد نتيجة STT المحفوظة بأمان."
+                        com.clw.aivideotranslator.session.DurableSttFailure.NO_BOUND_SOURCE ->
+                            "اربط فيديو صالحًا بالجلسة أولًا."
+                        com.clw.aivideotranslator.session.DurableSttFailure.RESTORE ->
+                            "تعذر استرداد نتيجة STT المحفوظة بأمان."
                         else -> "تعذر إكمال STT. لم تُعتبر النتيجة نجاحًا محفوظًا."
-                    }
+                    },
                 )
             }
 
-            val canSubmit = sourceReady && state.phase == DurableSttPhase.IDLE && apiKey.isNotBlank()
+            val canSubmit = sourceReady &&
+                state.phase == DurableSttPhase.IDLE &&
+                apiKey.isNotBlank()
             Button(
                 onClick = onRun,
                 enabled = canSubmit,
@@ -457,7 +627,11 @@ private fun SttCard(
 private fun InfoCard(title: String, body: String) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
             Text(body)
         }
     }
