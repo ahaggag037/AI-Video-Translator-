@@ -26,6 +26,9 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/clw/aivideotranslator/session/TranslationSessionViewModel.kt app/src/main/java/com/clw/aivideotranslator/ProductMainActivity.kt
+          git add \
+            app/src/main/java/com/clw/aivideotranslator/session/TranslationSessionViewModel.kt \
+            app/src/main/java/com/clw/aivideotranslator/session/FullVideoSttWindowJournalStore.kt \
+            app/src/main/java/com/clw/aivideotranslator/ProductMainActivity.kt
           git commit -m "product: wire durable full-video STT into launcher"
           git push origin HEAD:build/path-a-recovery-correction
