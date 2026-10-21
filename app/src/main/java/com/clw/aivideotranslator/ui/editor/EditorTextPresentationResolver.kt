@@ -22,6 +22,9 @@ internal data class EditorTextPresentation(
     val srtExportEnabled: Boolean,
     val mp4ExportEnabled: Boolean,
     val hasProviderAction: Boolean = false,
+    val cuePositionLabel: String? = null,
+    val canPreviousCue: Boolean = false,
+    val canNextCue: Boolean = false,
 )
 
 internal object EditorTextPresentationResolver {
