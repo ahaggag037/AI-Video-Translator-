@@ -15,12 +15,12 @@ data class SubtitleLayoutConfig(
     val candidateCap: Int = 256,
 ) {
     init {
-        require(maxLines == 2) { "V1 authored subtitle contract is two lines" }
+        require(maxLines in 1..2) { "V1 authored subtitle contract is one or two lines" }
         require(horizontalMarginFraction in 0.0..0.25)
         require(verticalMarginFraction in 0.0..0.25)
         require(preferredShortSideFraction > floorShortSideFraction)
         require(minimumPreferredPx >= absoluteFloorPx && absoluteFloorPx > 0)
-        require(lineSpacingMultiplier >= 1.0f)
+        require(lineSpacingMultiplier > 0f)
         require(paddingXEm >= 0f && paddingYEm >= 0f)
         require(guardPx >= 0)
         require(candidateCap > 0)
