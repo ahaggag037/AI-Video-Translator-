@@ -11,6 +11,7 @@ import com.clw.aivideotranslator.ui.home.HomeStatus
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentation
 import com.clw.aivideotranslator.ui.processing.ProcessingScreen
 import com.clw.aivideotranslator.ui.processing.ProcessingStage
+import com.clw.aivideotranslator.ui.recovery.ProviderRecoveryScreen
 import com.clw.aivideotranslator.ui.source.SourceReviewPresentation
 import com.clw.aivideotranslator.ui.source.SourceReviewScreen
 import com.clw.aivideotranslator.ui.theme.QuietProTheme
@@ -41,6 +42,9 @@ internal fun AppRoot(
     onBackFromProcessing: () -> Unit = {},
     onSafeStopProcessing: () -> Unit = {},
     onOpenProcessingDetails: () -> Unit = {},
+    onKeepProviderStateAndReturn: () -> Unit = {},
+    onConfirmFreshProviderAttempt: () -> Unit = {},
+    onOpenProviderRecoveryDetails: () -> Unit = {},
     showDeveloperTools: Boolean = false,
     onOpenDeveloperTools: () -> Unit = {},
 ) {
@@ -76,6 +80,12 @@ internal fun AppRoot(
                     onBack = onBackFromProcessing,
                     onSafeStop = onSafeStopProcessing,
                     onOpenDetails = onOpenProcessingDetails,
+                )
+
+                ProductRoute.PROVIDER_RECOVERY -> ProviderRecoveryScreen(
+                    onKeepStateAndReturn = onKeepProviderStateAndReturn,
+                    onConfirmFreshAttempt = onConfirmFreshProviderAttempt,
+                    onOpenDetails = onOpenProviderRecoveryDetails,
                 )
             }
         }
