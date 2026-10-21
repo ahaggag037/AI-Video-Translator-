@@ -32,12 +32,28 @@ internal enum class ProcessingStage {
     REVIEW_PREPARATION,
 }
 
+/**
+ * What the UI can truthfully say about the current provider submission boundary.
+ * UNKNOWN deliberately does not mean SENT or NOT_SENT.
+ */
+internal enum class ProviderSubmissionState {
+    NOT_SENT,
+    SENT,
+    UNKNOWN,
+}
+
 internal data class ProcessingPresentation(
     val stage: ProcessingStage,
-    val providerRequestSent: Boolean = false,
+    val providerSubmission: ProviderSubmissionState = ProviderSubmissionState.NOT_SENT,
     val safeStopAvailable: Boolean = false,
     val detail: String? = null,
-)
+) {
+    init {
+        require(!safeStopAvailable || providerSubmission == ProviderSubmissionState.NOT_SENT) {
+            "safe stop may be offered only while provider submission is known not to have happened"
+        }
+    }
+}
 
 /** Truthful stage-based progress only: no invented percentage and no false remote cancellation. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,7 +94,7 @@ internal fun ProcessingScreen(
                     fontWeight = FontWeight.Bold,
                 )
 
-                if (presentation.providerRequestSent) {
+                if (presentation.providerSubmission == ProviderSubmissionState.SENT) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = "أُرسل الطلب إلى المزود بالفعل. مغادرة هذه الشاشة لا تعني إلغاء الطلب البعيد، ولن يعيد التطبيق إرساله تلقائيًا.",
@@ -157,10 +173,10 @@ private fun StageRow(
 
 private fun stageHeadline(presentation: ProcessingPresentation): String = when (presentation.stage) {
     ProcessingStage.AUDIO_PREPARATION -> "جارٍ إعداد الصوت"
-    ProcessingStage.STT -> if (presentation.providerRequestSent) {
-        "بانتظار نتيجة تحويل الكلام إلى نص"
-    } else {
-        "جارٍ تجهيز طلب تحويل الكلام إلى نص"
+    ProcessingStage.STT -> when (presentation.providerSubmission) {
+        ProviderSubmissionState.NOT_SENT -> "جارٍ تجهيز طلب تحويل الكلام إلى نص"
+        ProviderSubmissionState.SENT -> "بانتظار نتيجة تحويل الكلام إلى نص"
+        ProviderSubmissionState.UNKNOWN -> "جارٍ تحويل الكلام إلى نص"
     }
     ProcessingStage.TEXT_PREPARATION -> "جارٍ تجهيز النص"
     ProcessingStage.TRANSLATION -> "جارٍ الترجمة"
