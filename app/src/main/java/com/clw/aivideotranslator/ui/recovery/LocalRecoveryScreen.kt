@@ -22,12 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-internal enum class LocalRecoveryPhase {
-    BASE,
-    CLEAN_CONFIRM,
-    BACKUP_FAILED,
-}
+internal enum class LocalRecoveryPhase { BASE, CLEAN_CONFIRM, BACKUP_FAILED }
 
+/** Fail-closed local recovery. No destructive cleanup is exposed without a verified backup path. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LocalRecoveryScreen(
@@ -42,9 +39,7 @@ internal fun LocalRecoveryScreen(
         topBar = {
             TopAppBar(
                 title = { Text("استرداد الجلسة المحلية") },
-                navigationIcon = {
-                    TextButton(onClick = onBackHome) { Text("الرئيسية") }
-                },
+                navigationIcon = { TextButton(onClick = onBackHome) { Text("الرئيسية") } },
             )
         },
     ) { contentPadding ->
@@ -63,65 +58,25 @@ internal fun LocalRecoveryScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text(
-                    text = when (phase) {
-                        LocalRecoveryPhase.BASE -> "تعذر فتح الجلسة بأمان"
-                        LocalRecoveryPhase.CLEAN_CONFIRM -> "تأكيد بدء جلسة نظيفة"
-                        LocalRecoveryPhase.BACKUP_FAILED -> "تعذر حفظ نسخة الاسترداد المحلية"
-                    },
+                    text = "تعذر فتح الجلسة بأمان",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                 )
-
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = when (phase) {
-                            LocalRecoveryPhase.BASE ->
-                                "أوقف التطبيق الاسترداد بدل تخمين أو تعديل بيانات الجلسة. لا يوجد أي إعادة إرسال تلقائية للمزود من هذه الشاشة."
-                            LocalRecoveryPhase.CLEAN_CONFIRM ->
-                                "هذه الخطوة تمسح الجلسة المحلية الحالية وتبدأ من جديد. لن تُنفذ إلا بعد التأكيد الصريح."
-                            LocalRecoveryPhase.BACKUP_FAILED ->
-                                "لم يبدأ التنظيف لأن خطوة الحماية المحلية لم تكتمل. بيانات الجلسة الحالية لم تُعتبر قابلة للحذف بأمان."
-                        },
+                        text = "أوقف التطبيق الاسترداد بدل تخمين أو تعديل بيانات الجلسة. لن تُحذف البيانات ولن يُعاد إرسال أي طلب للمزود من هذه الشاشة.",
                         modifier = Modifier.padding(16.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-
-                if (phase == LocalRecoveryPhase.CLEAN_CONFIRM) {
-                    Button(
-                        onClick = onConfirmCleanStart,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                    ) {
-                        Text("تأكيد بدء جلسة نظيفة")
-                    }
-                    OutlinedButton(
-                        onClick = onCancelCleanStart,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                    ) {
-                        Text("إلغاء")
-                    }
-                } else {
-                    OutlinedButton(
-                        onClick = onOpenDiagnostics,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                    ) {
-                        Text("فتح التشخيص")
-                    }
-                    Button(
-                        onClick = onRequestCleanStart,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                    ) {
-                        Text("بدء جلسة نظيفة")
-                    }
-                }
+                OutlinedButton(
+                    onClick = onOpenDiagnostics,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) { Text("فتح التشخيص") }
+                Button(
+                    onClick = onRequestCleanStart,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) { Text("اختيار فيديو وبدء جلسة جديدة") }
             }
         }
     }
