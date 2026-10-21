@@ -3,17 +3,20 @@ package com.clw.aivideotranslator.app
 /**
  * Product-surface navigation only. Durable session/provider state must never live here.
  *
- * This first slice deliberately contains only the Home <-> Source Review transition. Additional
- * destinations are added when their product slices become executable and tested.
+ * Routes are added only when the corresponding product surface exists and has a truthful state
+ * contract. Durable truth remains owned by the session/provider layers outside this navigator.
  */
 internal enum class ProductRoute {
     HOME,
     SOURCE_REVIEW,
+    AI_SETUP,
+    PROCESSING,
 }
 
 internal sealed interface ProductNavigationEvent {
     data object ChooseVideo : ProductNavigationEvent
     data object BackFromSourceReview : ProductNavigationEvent
+    data class SourceActivated(val needsAiSetup: Boolean) : ProductNavigationEvent
 }
 
 internal class ProductNavigator(
@@ -26,6 +29,11 @@ internal class ProductNavigator(
         route = when (event) {
             ProductNavigationEvent.ChooseVideo -> ProductRoute.SOURCE_REVIEW
             ProductNavigationEvent.BackFromSourceReview -> ProductRoute.HOME
+            is ProductNavigationEvent.SourceActivated -> if (event.needsAiSetup) {
+                ProductRoute.AI_SETUP
+            } else {
+                ProductRoute.PROCESSING
+            }
         }
     }
 }
