@@ -5,18 +5,15 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
-import android.graphics.text.LineBreaker
-import android.text.Layout
-import android.text.StaticLayout
-import android.text.TextDirectionHeuristics
-import android.text.TextPaint
+import com.clw.aivideotranslator.presentation.SubtitleStyle
+import kotlin.math.roundToInt
 
 /**
- * Shadow-only native raster boundary for X003/X004/X006.
+ * Native authoritative raster boundary for preview/export.
  *
  * Layout ownership remains in [SubtitleLayoutEngine]. This class accepts only a descriptor that can
- * be reproduced exactly for the same geometry/font/renderer environment, then rasterizes it once
- * into an immutable output-frame bitmap. Frame callbacks must consume the bitmap; they must not run
+ * be reproduced exactly for the same geometry/font/style/renderer environment, then rasterizes it
+ * once into an immutable output-frame bitmap. Frame callbacks consume the bitmap and never run
  * Android text layout again.
  */
 class SubtitleRasterizer(
@@ -28,6 +25,7 @@ class SubtitleRasterizer(
         descriptor: SubtitleLayoutDescriptor,
         geometry: FrameGeometry,
         font: LoadedSubtitleFont,
+        style: SubtitleStyle? = null,
     ): SubtitleRasterResult {
         if (descriptor.fontAssetHash != font.profile.assetSha256) {
             return SubtitleRasterResult.Rejected("FONT_IDENTITY_MISMATCH")
@@ -37,11 +35,17 @@ class SubtitleRasterizer(
             return SubtitleRasterResult.Rejected("RASTER_MEMORY_BUDGET_EXCEEDED")
         }
 
+        val effectiveConfig = runCatching {
+            style?.let { AuthoredSubtitleStyleLayout.configFor(it, config) } ?: config
+        }.getOrElse {
+            return SubtitleRasterResult.Rejected("INVALID_AUTHORED_STYLE")
+        }
         val reproduced = layoutEngine.layout(
             rawText = descriptor.text,
             geometry = geometry,
             font = font,
             rendererEnvironment = descriptor.rendererEnvironment,
+            style = style,
         )
         val reproducedDescriptor = (reproduced as? SubtitleLayoutResult.Fits)?.descriptor
             ?: return SubtitleRasterResult.Rejected("LAYOUT_NO_LONGER_ACCEPTED")
@@ -52,18 +56,27 @@ class SubtitleRasterizer(
         val displayText = SubtitleDisplayText.fromSemanticLines(descriptor.text, descriptor.lineRanges)
             ?: return SubtitleRasterResult.Rejected("LINE_RANGE_MISMATCH")
         val safeWidth = descriptor.safeRect.right - descriptor.safeRect.left
-        val layout = buildLayout(
+        val layout = layoutEngine.buildLayout(
             displayText = displayText,
             semanticText = descriptor.text,
             width = safeWidth,
             fontPx = descriptor.fontPx,
-            font = font,
+            typeface = font.typeface,
+            effectiveConfig = effectiveConfig,
+            style = style,
         )
         if (layout.lineCount != descriptor.lineRanges.size) {
             return SubtitleRasterResult.Rejected("RASTER_LINE_COUNT_MISMATCH")
         }
 
-        val inkMeasurement = inkBoundsProvider.measure(layout, config.guardPx)
+        val effectGuard = style?.let {
+            kotlin.math.ceil(
+                AuthoredSubtitleStyleLayout.outlineWidthPx(it, descriptor.fontPx) +
+                    AuthoredSubtitleStyleLayout.shadowRadiusPx(it, descriptor.fontPx) +
+                    AuthoredSubtitleStyleLayout.shadowOffsetYPx(it, descriptor.fontPx),
+            ).toInt() + 2
+        } ?: config.guardPx
+        val inkMeasurement = inkBoundsProvider.measure(layout, maxOf(config.guardPx, effectGuard))
         val localInk = inkMeasurement.bounds
         if (!inkMeasurement.proofComplete || localInk == null) {
             return SubtitleRasterResult.Rejected(inkMeasurement.diagnostic ?: "RASTER_INK_UNPROVEN")
@@ -83,22 +96,63 @@ class SubtitleRasterizer(
             mutable.eraseColor(Color.TRANSPARENT)
             val canvas = Canvas(mutable)
             val box = descriptor.boxBounds
-            val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(191, 0, 0, 0)
-                style = Paint.Style.FILL
+            if (style?.backgroundEnabled != false) {
+                val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.argb(191, 0, 0, 0)
+                    this.style = Paint.Style.FILL
+                }
+                val radius = maxOf(2f, descriptor.fontPx * 0.15f)
+                canvas.drawRoundRect(
+                    RectF(box.left.toFloat(), box.top.toFloat(), box.right.toFloat(), box.bottom.toFloat()),
+                    radius,
+                    radius,
+                    boxPaint,
+                )
             }
-            val radius = maxOf(2f, descriptor.fontPx * 0.15f)
-            canvas.drawRoundRect(
-                RectF(box.left.toFloat(), box.top.toFloat(), box.right.toFloat(), box.bottom.toFloat()),
-                radius,
-                radius,
-                boxPaint,
-            )
 
             val translateX = descriptor.inkBounds.left - localInk.left
             val translateY = descriptor.inkBounds.top - localInk.top
+            val authoredOpacity = style?.opacity ?: 1f
+            val authoredColor = style?.textColorArgb?.toInt() ?: Color.WHITE
+            val alpha = (Color.alpha(authoredColor) * authoredOpacity)
+                .roundToInt()
+                .coerceIn(0, 255)
+            val fillColor = Color.argb(
+                alpha,
+                Color.red(authoredColor),
+                Color.green(authoredColor),
+                Color.blue(authoredColor),
+            )
+            val outlinePx = style?.let {
+                AuthoredSubtitleStyleLayout.outlineWidthPx(it, descriptor.fontPx)
+            } ?: 0f
+
             canvas.save()
             canvas.translate(translateX.toFloat(), translateY.toFloat())
+            if (outlinePx > 0f) {
+                layout.paint.apply {
+                    this.style = Paint.Style.STROKE
+                    strokeWidth = outlinePx * 2f
+                    color = Color.argb(alpha, 0, 0, 0)
+                    clearShadowLayer()
+                }
+                layout.draw(canvas)
+            }
+            layout.paint.apply {
+                this.style = Paint.Style.FILL
+                strokeWidth = 0f
+                color = fillColor
+                if (style?.shadowEnabled == true) {
+                    setShadowLayer(
+                        AuthoredSubtitleStyleLayout.shadowRadiusPx(style, descriptor.fontPx),
+                        0f,
+                        AuthoredSubtitleStyleLayout.shadowOffsetYPx(style, descriptor.fontPx),
+                        Color.argb(alpha, 0, 0, 0),
+                    )
+                } else {
+                    clearShadowLayer()
+                }
+            }
             layout.draw(canvas)
             canvas.restore()
 
@@ -118,36 +172,6 @@ class SubtitleRasterizer(
         } finally {
             mutable.recycle()
         }
-    }
-
-    private fun buildLayout(
-        displayText: String,
-        semanticText: String,
-        width: Int,
-        fontPx: Int,
-        font: LoadedSubtitleFont,
-    ): StaticLayout {
-        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = font.typeface
-            textSize = fontPx.toFloat()
-            color = Color.WHITE
-        }
-        val direction = if (opaqueLtrOnly(semanticText)) TextDirectionHeuristics.LTR else TextDirectionHeuristics.RTL
-        return StaticLayout.Builder.obtain(displayText, 0, displayText.length, paint, width)
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setIncludePad(true)
-            .setLineSpacing(0f, config.lineSpacingMultiplier)
-            .setTextDirection(direction)
-            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
-            .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
-            .build()
-    }
-
-    private fun opaqueLtrOnly(text: String): Boolean {
-        val hasArabic = text.any {
-            it.code in 0x0600..0x06FF || it.code in 0x0750..0x077F || it.code in 0x08A0..0x08FF
-        }
-        return !hasArabic && (text.contains("://") || text.contains('@') || text.startsWith('`'))
     }
 
     companion object {
