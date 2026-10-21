@@ -66,9 +66,7 @@ internal fun StyleStudioScreen(
         topBar = {
             TopAppBar(
                 title = { Text("نمط الترجمة") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) { Text("رجوع") }
-                },
+                navigationIcon = { TextButton(onClick = onBack) { Text("رجوع") } },
             )
         },
     ) { contentPadding ->
@@ -81,16 +79,11 @@ internal fun StyleStudioScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 720.dp),
+                modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .background(Color.Black),
+                    modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -118,15 +111,9 @@ internal fun StyleStudioScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(onClick = onOpenText, modifier = Modifier.weight(1f)) {
-                        Text("النص")
-                    }
-                    OutlinedButton(onClick = onOpenTiming, modifier = Modifier.weight(1f)) {
-                        Text("التوقيت")
-                    }
-                    Button(onClick = {}, modifier = Modifier.weight(1f)) {
-                        Text("النمط")
-                    }
+                    OutlinedButton(onClick = onOpenText, modifier = Modifier.weight(1f)) { Text("النص") }
+                    OutlinedButton(onClick = onOpenTiming, modifier = Modifier.weight(1f)) { Text("التوقيت") }
+                    Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("النمط") }
                 }
 
                 Text("نطاق التعديل", fontWeight = FontWeight.Bold)
@@ -191,15 +178,9 @@ internal fun StyleStudioScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(onClick = onToggleOutline, modifier = Modifier.weight(1f)) {
-                        Text("الحد الخارجي")
-                    }
-                    OutlinedButton(onClick = onToggleShadow, modifier = Modifier.weight(1f)) {
-                        Text("الظل")
-                    }
-                    OutlinedButton(onClick = onToggleBackground, modifier = Modifier.weight(1f)) {
-                        Text("الخلفية")
-                    }
+                    OutlinedButton(onClick = onToggleOutline, modifier = Modifier.weight(1f)) { Text("الحد الخارجي") }
+                    OutlinedButton(onClick = onToggleShadow, modifier = Modifier.weight(1f)) { Text("الظل") }
+                    OutlinedButton(onClick = onToggleBackground, modifier = Modifier.weight(1f)) { Text("الخلفية") }
                 }
 
                 Text("موضع الترجمة", fontWeight = FontWeight.Bold)
@@ -224,9 +205,15 @@ internal fun StyleStudioScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    OutlinedButton(onClick = onDecreaseMaxLines) { Text("−") }
+                    OutlinedButton(
+                        onClick = onDecreaseMaxLines,
+                        enabled = presentation.style.maxLines > 1,
+                    ) { Text("−") }
                     Text("الحد الأقصى للأسطر: ${presentation.style.maxLines}")
-                    OutlinedButton(onClick = onIncreaseMaxLines) { Text("+") }
+                    OutlinedButton(
+                        onClick = onIncreaseMaxLines,
+                        enabled = presentation.style.maxLines < 2,
+                    ) { Text("+") }
                 }
 
                 Row(
