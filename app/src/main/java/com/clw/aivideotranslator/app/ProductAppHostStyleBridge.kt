@@ -2,6 +2,7 @@ package com.clw.aivideotranslator.app
 
 import android.content.Intent
 import android.net.Uri
+import com.clw.aivideotranslator.BuildConfig
 import com.clw.aivideotranslator.SnapshotBurnedExportSession
 import com.clw.aivideotranslator.SnapshotBurnedSubtitleExporter
 import com.clw.aivideotranslator.SubtitlePipeline
@@ -41,10 +42,12 @@ import com.clw.aivideotranslator.presentation.BuiltInStylePreset
 import com.clw.aivideotranslator.presentation.BuiltInSubtitleStyleResolver
 import com.clw.aivideotranslator.presentation.CueStyleOverride
 import com.clw.aivideotranslator.presentation.CueStyleOverrideDiff
+import com.clw.aivideotranslator.presentation.CommittedPresentationAssembler
 import com.clw.aivideotranslator.presentation.LayoutStatus
 import com.clw.aivideotranslator.presentation.StyleScope
 import com.clw.aivideotranslator.presentation.SubtitleAnchor
 import com.clw.aivideotranslator.presentation.SubtitleStyle
+import com.clw.aivideotranslator.session.DurableSourceFailure
 import com.clw.aivideotranslator.session.DurableSourcePhase
 import com.clw.aivideotranslator.session.DurableSttPhase
 import com.clw.aivideotranslator.session.DurableTranslationPhase
@@ -68,6 +71,11 @@ import com.clw.aivideotranslator.ui.processing.ProcessingPresentation
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentationResolver
 import com.clw.aivideotranslator.ui.processing.ProcessingResolution
 import com.clw.aivideotranslator.ui.processing.ProcessingStage
+import com.clw.aivideotranslator.ui.recovery.SourceRecoveryPhase
+import com.clw.aivideotranslator.ui.recovery.SourceRecoveryPresentation
+import com.clw.aivideotranslator.ui.settings.AppearancePreference
+import com.clw.aivideotranslator.ui.settings.DiagnosticsPresentation
+import com.clw.aivideotranslator.ui.settings.SettingsPresentation
 import com.clw.aivideotranslator.ui.source.SourceReviewPresentation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -102,6 +110,8 @@ internal fun ProductAppHost(
     var credentialLoaded by remember { mutableStateOf(false) }
     var providerRecoveryAttempt by remember { mutableStateOf<ProviderRecoveryFreshAttempt?>(null) }
     var recoveryAfterCredentialSetup by remember { mutableStateOf(false) }
+    var aiSetupFromSettings by remember { mutableStateOf(false) }
+    var diagnosticsAdvanced by remember { mutableStateOf(false) }
     var editorUnitState by remember { mutableStateOf(UnitEditorTextState()) }
     var displayTimingState by remember { mutableStateOf<DurableDisplayTimingState?>(null) }
     var subtitleStyleState by remember { mutableStateOf<DurableSubtitleStyleState?>(null) }
@@ -196,6 +206,7 @@ internal fun ProductAppHost(
         stt = durableStt,
         translation = durableTranslation,
         credentialUsable = providerApiKey.isNotBlank(),
+        sessionReadable = durableSource.failure != DurableSourceFailure.CORRUPT,
     )
 
     LaunchedEffect(runtimeFacts.reopenFacts, route) {
@@ -274,10 +285,15 @@ internal fun ProductAppHost(
     val activeEntry = cueSelection.unitId?.let { selectedId ->
         durableTranslation.entries.firstOrNull { it.sourceUnitId == selectedId }
     }
-    val activeUnit = cueSelection.unitId?.let { selectedId ->
-        durableTranslation.liveUnits?.firstOrNull { it.id == selectedId }
-    }
     val activeSessionId = durableTranslation.sessionId ?: durableSource.sessionId
+    val presentationUnits = ProductPresentationUnitResolver.resolve(
+        liveUnits = durableTranslation.liveUnits,
+        entries = durableTranslation.entries,
+        timedStt = durableStt.legacyResult,
+    )
+    val activeUnit = cueSelection.unitId?.let { selectedId ->
+        presentationUnits?.firstOrNull { it.id == selectedId }
+    }
 
     LaunchedEffect(activeSessionId, activeEntry?.sourceUnitId) {
         val sessionId = activeSessionId ?: return@LaunchedEffect
@@ -347,7 +363,7 @@ internal fun ProductAppHost(
 
     val timingRuntime = cueSelection.unitId?.let { selectedUnitId ->
         TimingRuntimeResolver.resolve(
-            units = durableTranslation.liveUnits.orEmpty(),
+            units = presentationUnits.orEmpty(),
             selectedUnitId = selectedUnitId,
             states = displayTimingState?.units.orEmpty(),
         )
@@ -418,6 +434,30 @@ internal fun ProductAppHost(
         is ProcessingResolution.Show -> processingResolution.presentation
         ProcessingResolution.ProviderRecovery -> ProcessingPresentation(stage = ProcessingStage.STT)
     }
+
+    val sourceRecoveryPresentation = SourceRecoveryPresentation(
+        phase = if (durableTranslation.entries.isNotEmpty()) {
+            SourceRecoveryPhase.MISSING_WITH_TEXT
+        } else {
+            SourceRecoveryPhase.MISSING_NO_TEXT
+        },
+        textOnlyAvailable = durableTranslation.entries.isNotEmpty(),
+        srtExportAvailable = durableTranslation.entries.isNotEmpty() && presentationUnits != null,
+    )
+    val settingsPresentation = SettingsPresentation(
+        appearance = AppearancePreference.SYSTEM,
+        aiCredentialConfigured = credentialRecord != null && credentialRecord?.status != CredentialStatus.REJECTED,
+        cacheSummary = "يُدار تلقائيًا",
+    )
+    val diagnosticsPresentation = DiagnosticsPresentation(
+        versionName = BuildConfig.VERSION_NAME,
+        versionCode = BuildConfig.VERSION_CODE,
+        buildType = BuildConfig.BUILD_TYPE,
+        sessionStateLabel = if (activeSessionId == null) "لا توجد جلسة" else "جلسة محلية نشطة",
+        sourceStateLabel = durableSource.phase.name,
+        providerStateLabel = "${durableStt.phase.name} / ${durableTranslation.phase.name}",
+        advancedExpanded = diagnosticsAdvanced,
+    )
 
     val credentialStatus = when {
         durableStt.phase == DurableSttPhase.LIVE_SUCCESS ||
@@ -533,7 +573,7 @@ internal fun ProductAppHost(
         val sessionId = activeSessionId ?: return
         val sourceUri = durableSource.contentUri?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return
         val metadata = activeVideoMetadata ?: return
-        val units = durableTranslation.liveUnits ?: return
+        val units = presentationUnits ?: return
         val entries = durableTranslation.entries
         if (units.isEmpty() || entries.isEmpty()) return
         scope.launch {
@@ -559,6 +599,42 @@ internal fun ProductAppHost(
                 productPresentationBundle = null
                 presentationBuildError = error.message ?: "تعذر تجهيز المعاينة/التصدير من الحالة الملتزمة"
             }
+        }
+    }
+
+    fun exportCommittedSrtOnly() {
+        val sessionId = activeSessionId ?: return
+        val units = presentationUnits ?: return
+        val entries = durableTranslation.entries
+        if (units.isEmpty() || entries.isEmpty()) return
+        scope.launch {
+            srtOutput = null
+            srtSettlement = OutputSettlement.NOT_REQUESTED
+            mp4Output = null
+            mp4Settlement = OutputSettlement.NOT_REQUESTED
+            val saved = withContext(Dispatchers.IO) {
+                runCatching {
+                    val cues = CommittedPresentationAssembler.cues(
+                        units = units,
+                        entries = entries,
+                        textState = editorTextStore.read(sessionId),
+                        timingState = displayTimingStore.read(sessionId),
+                    )
+                    val maxTimelineMs = cues.maxOf { it.endMs }
+                    ProductOutputStore.saveSrt(
+                        context = context,
+                        baseName = exportBaseName,
+                        srtUtf8 = SubtitlePipeline.srt(cues, maxTimelineMs),
+                    )
+                }
+            }
+            saved.onSuccess { output ->
+                srtOutput = output
+                srtSettlement = OutputSettlement.SUCCESS
+            }.onFailure {
+                srtSettlement = OutputSettlement.FAILED
+            }
+            navigate(ProductNavigationEvent.ExportSettled)
         }
     }
 
@@ -709,7 +785,10 @@ internal fun ProductAppHost(
         onAdoptVideo = ::adoptCandidate,
         aiCredentialStatus = credentialStatus,
         onBackFromAiSetup = {
-            if (recoveryAfterCredentialSetup) {
+            if (aiSetupFromSettings) {
+                aiSetupFromSettings = false
+                route = ProductRoute.SETTINGS
+            } else if (recoveryAfterCredentialSetup) {
                 recoveryAfterCredentialSetup = false
                 route = ProductRoute.PROVIDER_RECOVERY
             } else {
@@ -725,7 +804,10 @@ internal fun ProductAppHost(
                     }
                     if (saved != null) {
                         credentialRecord = saved
-                        if (recoveryAfterCredentialSetup) {
+                        if (aiSetupFromSettings) {
+                            aiSetupFromSettings = false
+                            route = ProductRoute.SETTINGS
+                        } else if (recoveryAfterCredentialSetup) {
                             recoveryAfterCredentialSetup = false
                             ProviderRecoveryFreshAttempt.armOrNull(
                                 priorSessionId = durableStt.sessionId,
@@ -742,11 +824,13 @@ internal fun ProductAppHost(
         },
         processingPresentation = processingPresentation,
         onBackFromProcessing = { route = ProductRoute.HOME },
+        onOpenProcessingDetails = { navigate(ProductNavigationEvent.OpenDiagnostics) },
         onKeepProviderStateAndReturn = {
             providerRecoveryAttempt = null
             recoveryAfterCredentialSetup = false
             navigate(ProductNavigationEvent.KeepProviderStateAndReturn)
         },
+        onOpenProviderRecoveryDetails = { navigate(ProductNavigationEvent.OpenDiagnostics) },
         onConfirmFreshProviderAttempt = {
             val attempt = providerRecoveryAttempt
             if (attempt != null) {
@@ -759,7 +843,21 @@ internal fun ProductAppHost(
                 route = ProductRoute.AI_SETUP
             }
         },
-        editorTextPresentation = editorPresentation,
+        sourceRecoveryPresentation = sourceRecoveryPresentation,
+        onBackHomeFromSourceRecovery = { navigate(ProductNavigationEvent.BackHomeFromRecovery) },
+        onContinueTextOnly = { route = ProductRoute.EDITOR_TEXT },
+        onRelinkSource = {
+            navigate(ProductNavigationEvent.ChooseVideo)
+            picker.launch(arrayOf("video/*"))
+        },
+        onSourceRecoveryExportSrt = ::exportCommittedSrtOnly,
+        onBackHomeFromLocalRecovery = { navigate(ProductNavigationEvent.BackHomeFromRecovery) },
+        onOpenLocalDiagnostics = { navigate(ProductNavigationEvent.OpenDiagnostics) },
+        onRequestCleanStart = {
+            navigate(ProductNavigationEvent.ChooseVideo)
+            picker.launch(arrayOf("video/*"))
+        },
+        editorTextPresentation = editorPresentation.copy(actionError = presentationBuildError),
         onBackFromEditor = { navigate(ProductNavigationEvent.BackFromEditor) },
         onEditorTargetChange = { text ->
             val sessionId = activeSessionId
@@ -846,10 +944,7 @@ internal fun ProductAppHost(
         onOpenExport = {
             prepareCommittedBundleAndNavigate(ProductNavigationEvent.OpenExportCenter)
         },
-        onExportSrtOnly = {
-            exportMode = ExportMode.SRT_ONLY
-            prepareCommittedBundleAndNavigate(ProductNavigationEvent.OpenExportCenter)
-        },
+        onExportSrtOnly = ::exportCommittedSrtOnly,
         timingEditorPresentation = timingEditorPresentation,
         onTimingStartChange = { startText ->
             timingEditorPresentation?.let { setTimingFields(startText, it.endField) }
@@ -973,8 +1068,15 @@ internal fun ProductAppHost(
         onShareResultOutput = ::shareOutput,
         onLocateResultOutput = ::openOutput,
         onRetryResultOutput = { startProductExport(it) },
+        settingsPresentation = settingsPresentation,
         onBackFromSettings = { navigate(ProductNavigationEvent.BackHomeFromSecondary) },
+        onOpenAiCredentialSettings = {
+            aiSetupFromSettings = true
+            route = ProductRoute.AI_SETUP
+        },
         onOpenDiagnostics = { navigate(ProductNavigationEvent.OpenDiagnostics) },
+        diagnosticsPresentation = diagnosticsPresentation,
         onBackFromDiagnostics = { navigate(ProductNavigationEvent.BackHomeFromSecondary) },
+        onToggleAdvancedDiagnostics = { diagnosticsAdvanced = !diagnosticsAdvanced },
     )
 }

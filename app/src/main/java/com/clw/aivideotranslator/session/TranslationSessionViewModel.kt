@@ -668,15 +668,7 @@ internal class TranslationSessionViewModel(
                 )
                 else -> DurableSttUiState.idle()
             }
-            mutableTranslation.value = if (sourceFailure == null) {
-                restoreTranslationState(sessionId)
-            } else {
-                DurableTranslationUiState(
-                    phase = DurableTranslationPhase.FAILED,
-                    sessionId = sessionId,
-                    failure = DurableTranslationFailure.RESTORE,
-                )
-            }
+            mutableTranslation.value = restoreTranslationState(sessionId)
             return
         }
         val availability = controllerState.assessment?.source?.availability

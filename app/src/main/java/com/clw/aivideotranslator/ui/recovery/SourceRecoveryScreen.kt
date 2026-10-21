@@ -115,7 +115,7 @@ internal fun SourceRecoveryScreen(
                         if (presentation.phase == SourceRecoveryPhase.RELINK_VERIFYING) {
                             "جارٍ التحقق من المصدر…"
                         } else {
-                            "إعادة ربط الفيديو"
+                            "اختيار فيديو وبدء جلسة جديدة"
                         },
                     )
                 }
@@ -137,7 +137,7 @@ private fun phaseBody(phase: SourceRecoveryPhase): String = when (phase) {
     SourceRecoveryPhase.MISSING_NO_TEXT ->
         "لا يمكن متابعة المعالجة المعتمدة على الفيديو حتى إعادة ربط المصدر الصحيح."
     SourceRecoveryPhase.RELINK_VERIFYING ->
-        "لن يعتمد التطبيق الفيديو الجديد قبل التحقق من هويته وتوافقه مع الجلسة المحفوظة."
+        "سيتم فحص الفيديو المحدد قبل بدء جلسة جديدة، وتبقى بيانات الجلسة السابقة محفوظة محليًا."
     SourceRecoveryPhase.RELINK_MISMATCH ->
-        "لم يتم تغيير المصدر المحفوظ. اختر الفيديو الأصلي أو مصدرًا يطابق هوية الجلسة."
+        "لم يبدأ التطبيق جلسة جديدة بهذا الملف. اختر فيديو صالحًا وحاول مرة أخرى."
 }

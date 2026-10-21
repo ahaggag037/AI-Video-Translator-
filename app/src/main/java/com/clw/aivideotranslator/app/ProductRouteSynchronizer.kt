@@ -21,8 +21,12 @@ internal object ProductRouteSynchronizer {
         }
 
         if (facts.hasActiveSession && !facts.sourceAvailable) {
-            val textOnlyAllowed = facts.hasAcceptedText && current == ProductRoute.EDITOR_TEXT
-            if (!textOnlyAllowed) return ProductRoute.SOURCE_RECOVERY
+            val sourceIndependent = facts.hasAcceptedText && current in setOf(
+                ProductRoute.EDITOR_TEXT,
+                ProductRoute.RESULT,
+            )
+            val replacingSource = current == ProductRoute.SOURCE_REVIEW
+            if (!sourceIndependent && !replacingSource) return ProductRoute.SOURCE_RECOVERY
         }
 
         if (current == ProductRoute.HOME || current == ProductRoute.PROCESSING) {

@@ -25,6 +25,7 @@ internal data class EditorTextPresentation(
     val cuePositionLabel: String? = null,
     val canPreviousCue: Boolean = false,
     val canNextCue: Boolean = false,
+    val actionError: String? = null,
 )
 
 internal object EditorTextPresentationResolver {
