@@ -19,21 +19,21 @@ class SubtitleStyleStateStoreTest {
     private fun store(root: File) = SubtitleStyleStateStore(root) { _ -> Unit }
 
     private val project = SubtitleStyle(
-        fontFamilyId = "noto-sans-arabic",
-        fontWeight = 600,
+        fontFamilyId = "x003-noto-sans-arabic-full-regular-2.012",
+        fontWeight = 400,
         fontSizeSp = 42f,
         lineHeightSp = 52f,
         textColorArgb = 0xFFFFFFFF,
         opacity = 1f,
         alignment = SubtitleTextAlignment.CENTER,
-        outlineWidthDp = 2f,
-        shadowEnabled = true,
-        backgroundEnabled = false,
+        outlineWidthDp = 0f,
+        shadowEnabled = false,
+        backgroundEnabled = true,
         anchor = SubtitleAnchor.BOTTOM_CENTER,
         offsetXFraction = 0f,
         offsetYFraction = 0f,
-        safeMarginFraction = 0.05f,
-        maxWidthFraction = 0.86f,
+        safeMarginFraction = 0.06f,
+        maxWidthFraction = 0.88f,
         maxLines = 2,
     )
 
@@ -66,14 +66,14 @@ class SubtitleStyleStateStoreTest {
             store(root).setCueOverride(
                 sessionId = "s1",
                 cueId = "u0001",
-                override = CueStyleOverride(fontSizeSp = 48f, backgroundEnabled = true),
+                override = CueStyleOverride(fontSizeSp = 48f, backgroundEnabled = false),
             )
 
             val reopened = store(root).read("s1")
             val effective = reopened.effective("u0001")
             assertEquals(project, reopened.projectStyle)
             assertEquals(48f, effective.fontSizeSp)
-            assertEquals(true, effective.backgroundEnabled)
+            assertEquals(false, effective.backgroundEnabled)
             assertEquals(project.lineHeightSp, effective.lineHeightSp)
             assertNull(reopened.cueOverrides["u0002"])
         } finally {
@@ -99,7 +99,7 @@ class SubtitleStyleStateStoreTest {
     @Test fun effectiveStyleMatchesFieldLevelResolver() {
         val root = root()
         try {
-            val override = CueStyleOverride(anchor = SubtitleAnchor.TOP_CENTER, maxLines = 3)
+            val override = CueStyleOverride(anchor = SubtitleAnchor.TOP_CENTER, maxLines = 1)
             store(root).setProjectStyle("s1", project)
             store(root).setCueOverride("s1", "u0001", override)
 
