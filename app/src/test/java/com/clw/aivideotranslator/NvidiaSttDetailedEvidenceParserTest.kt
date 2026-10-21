@@ -5,29 +5,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NvidiaSttDetailedEvidenceParserTest {
-    @Test fun detailedParsePreservesExactLegacyAcceptedResultAndRawEvidence() {
+    @Test fun detailedParsePreservesDocumentedMillisecondOffsetsAndRawEvidence() {
         val body = """
             {
               "text": "Hello world.",
               "words": [
-                {"word": "Hello", "start": 0.08, "end": 0.20, "confidence": 0.9},
-                {"word": "world.", "start": 0.22, "end": 0.80, "confidence": 0.8}
+                {"word": "Hello", "start_time": 20, "end_time": 40, "confidence": 0.9},
+                {"word": "world.", "start_time": 50, "end_time": 80, "confidence": 0.8}
               ]
             }
         """.trimIndent()
 
-        val legacy = NvidiaSttClient.parseResponse(body, 206)
+        val accepted = NvidiaSttClient.parseResponse(body, 206)
         val detailed = NvidiaSttDetailedEvidenceParser.parse(body, 206)
 
-        assertEquals(legacy, detailed.result)
+        assertEquals(accepted, detailed.result)
         assertEquals(206, detailed.result.httpStatus)
         assertEquals(body, detailed.timingEvidence.rawResponseUtf8)
         assertEquals(NvidiaSttTimingEvidenceInspector.inspect(body), detailed.timingEvidence)
-        assertEquals(80L, detailed.result.words.first().startMs)
-        assertEquals(800L, detailed.result.words.last().endMs)
+        // These deliberately stay below the old 120-value heuristic threshold. NVIDIA WordInfo
+        // defines them as milliseconds, so magnitude must never promote them to seconds.
+        assertEquals(20L, detailed.result.words.first().startMs)
+        assertEquals(80L, detailed.result.words.last().endMs)
     }
 
-    @Test fun evidenceDoesNotChangeLegacyMultiSchemaParserSemantics() {
+    @Test fun evidenceDoesNotChangeMultiSchemaParserSemantics() {
         val body = """
             {
               "text": "accepted",
@@ -41,9 +43,9 @@ class NvidiaSttDetailedEvidenceParserTest {
         """.trimIndent()
 
         val detailed = NvidiaSttDetailedEvidenceParser.parse(body)
-        val legacy = NvidiaSttClient.parseResponse(body)
+        val accepted = NvidiaSttClient.parseResponse(body)
 
-        assertEquals(legacy, detailed.result)
+        assertEquals(accepted, detailed.result)
         assertEquals(listOf("info", "root"), detailed.result.words.map { it.text })
         assertTrue(detailed.timingEvidence.hasMultipleWordSchemas)
         assertEquals(2, detailed.timingEvidence.sources.size)
