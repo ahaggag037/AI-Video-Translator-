@@ -6,6 +6,8 @@ import com.clw.aivideotranslator.editor.DisplayTimingStateStore
 import com.clw.aivideotranslator.editor.EditorTextStateStore
 import com.clw.aivideotranslator.editor.SubtitleStyleStateStore
 import com.clw.aivideotranslator.session.ActiveSessionRegistry
+import com.clw.aivideotranslator.session.FullVideoSttAggregateStore
+import com.clw.aivideotranslator.session.FullVideoSttWindowJournalStore
 import com.clw.aivideotranslator.session.SessionManifest
 import com.clw.aivideotranslator.session.TranslationRequestPlanStore
 import com.clw.aivideotranslator.session.TranslationSessionStore
@@ -49,6 +51,20 @@ class AiVideoTranslatorApplication : Application() {
 
     internal val translationRequestPlans: TranslationRequestPlanStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         TranslationRequestPlanStore(
+            sessionsRoot = translationSessionRoot,
+            validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
+        )
+    }
+
+    internal val fullVideoSttWindowJournal: FullVideoSttWindowJournalStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        FullVideoSttWindowJournalStore(
+            sessionsRoot = translationSessionRoot,
+            validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
+        )
+    }
+
+    internal val fullVideoSttAggregates: FullVideoSttAggregateStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        FullVideoSttAggregateStore(
             sessionsRoot = translationSessionRoot,
             validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
         )
