@@ -35,8 +35,6 @@ import androidx.compose.ui.unit.dp
 internal fun EditorTextScreen(
     presentation: EditorTextPresentation,
     onBack: () -> Unit,
-    onPreviousCue: () -> Unit,
-    onNextCue: () -> Unit,
     onTargetChange: (String) -> Unit,
     onCommitDraft: () -> Unit,
     onUndo: () -> Unit,
@@ -48,6 +46,8 @@ internal fun EditorTextScreen(
     onOpenFullscreen: () -> Unit,
     onOpenExport: () -> Unit,
     onExportSrtOnly: () -> Unit,
+    onPreviousCue: () -> Unit = {},
+    onNextCue: () -> Unit = {},
 ) {
     Scaffold(
         topBar = {
