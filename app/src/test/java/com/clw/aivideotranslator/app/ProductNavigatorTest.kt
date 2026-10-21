@@ -60,6 +60,22 @@ class ProductNavigatorTest {
         assertEquals(ProductRoute.PROCESSING, navigator.route)
     }
 
+    @Test fun unknownProviderOutcomeLeavesProcessingForDedicatedRecovery() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.PROCESSING)
+
+        navigator.onEvent(ProductNavigationEvent.ProviderOutcomeUnknown)
+
+        assertEquals(ProductRoute.PROVIDER_RECOVERY, navigator.route)
+    }
+
+    @Test fun keepUnknownProviderStateAndReturnGoesHomeWithoutFreshAttempt() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.PROVIDER_RECOVERY)
+
+        navigator.onEvent(ProductNavigationEvent.KeepProviderStateAndReturn)
+
+        assertEquals(ProductRoute.HOME, navigator.route)
+    }
+
     @Test fun routeStateContainsNoDurableSessionOrProviderPayload() {
         val fields = ProductNavigator::class.java.declaredFields.map { it.type.name }
 
