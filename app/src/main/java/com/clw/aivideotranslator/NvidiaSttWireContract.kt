@@ -53,6 +53,9 @@ internal data class NvidiaSttRequestProfile(
  * published HTTP example for this NVCF endpoint. Authorization is intentionally not identity data.
  */
 internal object NvidiaSttWireContract {
+    const val FOLLOW_REDIRECTS = false
+    const val RETRY_ON_CONNECTION_FAILURE = false
+
     val PROFILE = NvidiaSttRequestProfile(
         providerId = "nvidia",
         modelId = "nvidia/parakeet-ctc-1_1b-asr",
