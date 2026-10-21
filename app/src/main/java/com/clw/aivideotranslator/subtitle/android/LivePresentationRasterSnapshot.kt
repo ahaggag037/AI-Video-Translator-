@@ -8,12 +8,14 @@ import com.clw.aivideotranslator.ArabicSubtitleCue
 import com.clw.aivideotranslator.VideoMetadata
 import com.clw.aivideotranslator.VideoProbe
 import com.clw.aivideotranslator.media.FrameGeometryResolver
+import com.clw.aivideotranslator.presentation.SubtitleStyle
 
 /**
  * One immutable presentation-layout truth shared by preview and burned export.
  *
- * Timing/text still come from the live P0-F presentation cues. This snapshot only freezes native
- * layout/font/geometry identity so preview and export cannot independently lay out the same text.
+ * Timing/text/style come from committed presentation truth. The snapshot freezes native
+ * layout/font/geometry/style identity so preview and export cannot independently lay out the same
+ * subtitle.
  */
 data class LivePresentationRasterSnapshot(
     val geometry: FrameGeometry,
@@ -28,7 +30,7 @@ object LivePresentationRasterSnapshotFactory {
         cues: List<ArabicSubtitleCue>,
     ): Result<LivePresentationRasterSnapshot> = runCatching {
         val metadata = VideoProbe.read(context.applicationContext, sourceUri).getOrThrow()
-        buildFromMetadata(context, metadata, cues)
+        buildFromMetadata(context, metadata, cues, null)
     }
 
     fun build(
@@ -36,13 +38,33 @@ object LivePresentationRasterSnapshotFactory {
         metadata: VideoMetadata,
         cues: List<ArabicSubtitleCue>,
     ): Result<LivePresentationRasterSnapshot> = runCatching {
-        buildFromMetadata(context, metadata, cues)
+        buildFromMetadata(context, metadata, cues, null)
+    }
+
+    internal fun buildStyled(
+        context: Context,
+        sourceUri: Uri,
+        cues: List<ArabicSubtitleCue>,
+        styleForCue: (String) -> SubtitleStyle,
+    ): Result<LivePresentationRasterSnapshot> = runCatching {
+        val metadata = VideoProbe.read(context.applicationContext, sourceUri).getOrThrow()
+        buildFromMetadata(context, metadata, cues, styleForCue)
+    }
+
+    internal fun buildStyled(
+        context: Context,
+        metadata: VideoMetadata,
+        cues: List<ArabicSubtitleCue>,
+        styleForCue: (String) -> SubtitleStyle,
+    ): Result<LivePresentationRasterSnapshot> = runCatching {
+        buildFromMetadata(context, metadata, cues, styleForCue)
     }
 
     private fun buildFromMetadata(
         context: Context,
         metadata: VideoMetadata,
         cues: List<ArabicSubtitleCue>,
+        styleForCue: ((String) -> SubtitleStyle)?,
     ): LivePresentationRasterSnapshot {
         require(cues.isNotEmpty()) { "no presentation cues for raster snapshot" }
         val encodedWidth = requireNotNull(metadata.width) { "video width is unavailable" }
@@ -68,15 +90,18 @@ object LivePresentationRasterSnapshotFactory {
         val layoutEngine = SubtitleLayoutEngine()
 
         val rasterCues = cues.mapIndexed { index, cue ->
+            val authoredStyle = styleForCue?.invoke(cue.sourceUnitId)
             val layout = layoutEngine.layout(
                 rawText = cue.text,
                 geometry = geometry,
                 font = font,
                 rendererEnvironment = rendererEnvironment,
+                style = authoredStyle,
             )
             val descriptor = (layout as? SubtitleLayoutResult.Fits)?.descriptor
                 ?: error("subtitle layout is not safely renderable: ${layout.status}")
-            val requestId = "live-${index}-${cue.sourceUnitId}-${cue.startMs}-${cue.endMs}"
+            val styleIdentity = authoredStyle?.hashCode()?.toUInt()?.toString(16) ?: "legacy"
+            val requestId = "live-${index}-${cue.sourceUnitId}-${cue.startMs}-${cue.endMs}-$styleIdentity"
             SnapshotRasterCue(
                 cueId = requestId,
                 startUs = Math.multiplyExact(cue.startMs, 1_000L),
@@ -86,6 +111,7 @@ object LivePresentationRasterSnapshotFactory {
                     descriptor = descriptor,
                     geometry = geometry,
                     font = font,
+                    style = authoredStyle,
                 ),
             )
         }
