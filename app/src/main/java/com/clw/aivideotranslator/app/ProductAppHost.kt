@@ -14,6 +14,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.clw.aivideotranslator.VideoProbe
+import com.clw.aivideotranslator.editor.DisplayTimingStateStore
 import com.clw.aivideotranslator.editor.EditorTextStateStore
 import com.clw.aivideotranslator.editor.UnitEditorTextState
 import com.clw.aivideotranslator.session.DurableSourcePhase
@@ -44,6 +45,7 @@ internal fun ProductAppHost(
     sessionViewModel: TranslationSessionViewModel,
     sourceSelectionViewModel: SourceSelectionViewModel,
     editorTextStore: EditorTextStateStore,
+    displayTimingStore: DisplayTimingStateStore,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -51,6 +53,10 @@ internal fun ProductAppHost(
     val durableStt by sessionViewModel.stt.collectAsState()
     val durableTranslation by sessionViewModel.translation.collectAsState()
     val candidate by sourceSelectionViewModel.snapshot.collectAsState()
+
+    // Keep the store injected at the product boundary even before the timing surface starts
+    // consuming it below; it is part of the same durable session root, never UI-owned state.
+    remember(displayTimingStore) { displayTimingStore }
 
     val navigator = remember { ProductNavigator() }
     val cueNavigator = remember { EditorCueNavigator() }
