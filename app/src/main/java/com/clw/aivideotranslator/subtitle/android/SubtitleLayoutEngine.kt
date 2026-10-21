@@ -8,9 +8,14 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
 import android.text.TextPaint
+import com.clw.aivideotranslator.presentation.SubtitleAnchor
+import com.clw.aivideotranslator.presentation.SubtitleStyle
+import com.clw.aivideotranslator.presentation.SubtitleTextAlignment
 import com.clw.aivideotranslator.semantic.TextBoundaryProvider
 import com.clw.aivideotranslator.semantic.TextPolicy
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 class SubtitleLayoutEngine(
     private val boundaryProvider: TextBoundaryProvider = AndroidTextBoundaryProvider(),
@@ -22,10 +27,19 @@ class SubtitleLayoutEngine(
         geometry: FrameGeometry,
         font: LoadedSubtitleFont,
         rendererEnvironment: String,
+        style: SubtitleStyle? = null,
     ): SubtitleLayoutResult {
         if (rendererEnvironment.isBlank()) return SubtitleLayoutResult.ReviewRequired("MISSING_RENDERER_ENVIRONMENT")
         val fontProfile = font.profile
         val typeface = font.typeface
+        if (style != null && (style.fontFamilyId != fontProfile.profileId || style.fontWeight != fontProfile.weight)) {
+            return SubtitleLayoutResult.ReviewRequired("STYLE_FONT_PROFILE_MISMATCH")
+        }
+        val effectiveConfig = runCatching {
+            style?.let { AuthoredSubtitleStyleLayout.configFor(it, config) } ?: config
+        }.getOrElse {
+            return SubtitleLayoutResult.ReviewRequired("INVALID_AUTHORED_STYLE")
+        }
 
         val canonical = runCatching { TextPolicy.canonicalView(rawText) }.getOrElse {
             return SubtitleLayoutResult.ReviewRequired("INVALID_TEXT")
@@ -37,17 +51,17 @@ class SubtitleLayoutEngine(
         if (text.isBlank()) return SubtitleLayoutResult.ReviewRequired("EMPTY_TEXT")
         if (!font.supports(text)) return SubtitleLayoutResult.ReviewRequired("BUNDLED_FONT_GLYPH_UNSUPPORTED")
 
-        val safe = runCatching { SubtitleDefaults.safeRect(geometry, config) }.getOrElse {
+        val safe = runCatching { SubtitleDefaults.safeRect(geometry, effectiveConfig) }.getOrElse {
             return SubtitleLayoutResult.ReviewRequired("INVALID_FRAME_GEOMETRY")
         }
         val safeWidth = safe.right - safe.left
-        val preferred = SubtitleDefaults.preferredFontPx(geometry, config)
-        val floor = SubtitleDefaults.floorFontPx(geometry, config)
+        val preferred = SubtitleDefaults.preferredFontPx(geometry, effectiveConfig)
+        val floor = SubtitleDefaults.floorFontPx(geometry, effectiveConfig)
         if (floor > preferred) return SubtitleLayoutResult.ReviewRequired("INVALID_FONT_RANGE")
 
         val boundaries = boundaryProvider.boundaries(text, canonical.protectedRanges)
         val legalBreaks = boundaries.legalLineBreakOffsets.sorted()
-        if (legalBreaks.size > config.candidateCap) {
+        if (legalBreaks.size > effectiveConfig.candidateCap) {
             return SubtitleLayoutResult.ReviewRequired("LAYOUT_BUDGET_EXCEEDED")
         }
 
@@ -56,47 +70,101 @@ class SubtitleLayoutEngine(
         while (fontPx >= floor) {
             val candidates = buildList<Int?> {
                 add(null)
-                legalBreaks.forEach { add(it) }
+                if (effectiveConfig.maxLines > 1) legalBreaks.forEach { add(it) }
             }
             val fits = mutableListOf<Pair<SubtitleLayoutDescriptor, Float>>()
             candidates.forEach { forcedBreak ->
                 val display = forcedBreak?.let { offset ->
                     text.substring(0, offset) + "\n" + text.substring(offset)
                 } ?: text
-                val native = buildLayout(display, text, safeWidth, fontPx, typeface)
-                if (native.lineCount !in 1..config.maxLines) return@forEach
+                val native = buildLayout(
+                    displayText = display,
+                    semanticText = text,
+                    width = safeWidth,
+                    fontPx = fontPx,
+                    typeface = typeface,
+                    effectiveConfig = effectiveConfig,
+                    style = style,
+                )
+                if (native.lineCount !in 1..effectiveConfig.maxLines) return@forEach
                 if (native.getLineEnd(native.lineCount - 1) != display.length) return@forEach
                 if (forcedBreak != null && native.lineCount != 2) return@forEach
 
                 val semanticRanges = semanticLineRanges(native, text, forcedBreak)
                     ?: return@forEach
                 if (semanticRanges.size != native.lineCount) return@forEach
-                // StaticLayout may emergency-wrap a long token even with hyphenation disabled.
-                // Native wrapping must satisfy the SAME protected-span/grapheme policy as forced
-                // candidates; fitting geometry alone must not authorize an illegal break.
                 if (!SubtitleLineCoverage.usesLegalBreaks(text.length, semanticRanges, boundaries)) return@forEach
 
-                val inkMeasurement = inkBoundsProvider.measure(native, config.guardPx)
+                val effectGuard = style?.let {
+                    ceil(
+                        AuthoredSubtitleStyleLayout.outlineWidthPx(it, fontPx) +
+                            AuthoredSubtitleStyleLayout.shadowRadiusPx(it, fontPx) +
+                            AuthoredSubtitleStyleLayout.shadowOffsetYPx(it, fontPx),
+                    ).toInt() + 2
+                } ?: effectiveConfig.guardPx
+                val inkMeasurement = inkBoundsProvider.measure(native, maxOf(effectiveConfig.guardPx, effectGuard))
                 val ink = inkMeasurement.bounds
                 if (!inkMeasurement.proofComplete || ink == null) {
                     incompleteInkProof = true
                     return@forEach
                 }
-                val paddingX = maxOf(1, (fontPx * config.paddingXEm).toInt())
-                val paddingY = maxOf(1, (fontPx * config.paddingYEm).toInt())
+                val paddingX = maxOf(1, (fontPx * effectiveConfig.paddingXEm).toInt())
+                val paddingY = maxOf(1, (fontPx * effectiveConfig.paddingYEm).toInt())
+                val inkWidth = ink.right - ink.left
+                val inkHeight = ink.bottom - ink.top
+                val boxWidth = inkWidth + paddingX * 2
+                val boxHeight = inkHeight + paddingY * 2
+                if (boxWidth <= 0 || boxHeight <= 0) return@forEach
+                if (boxWidth > safe.right - safe.left || boxHeight > safe.bottom - safe.top) return@forEach
 
-                val placedInk = PixelRect(
-                    left = safe.left + ink.left,
-                    top = safe.bottom - paddingY - ink.bottom + ink.top,
-                    right = safe.left + ink.right,
-                    bottom = safe.bottom - paddingY,
-                )
-                val box = PixelRect(
-                    left = placedInk.left - paddingX,
-                    top = placedInk.top - paddingY,
-                    right = placedInk.right + paddingX,
-                    bottom = placedInk.bottom + paddingY,
-                )
+                val content = geometry.videoContentRect
+                val offsetX = style?.let {
+                    ((content.right - content.left) * it.offsetXFraction).roundToInt()
+                } ?: 0
+                val offsetY = style?.let {
+                    ((content.bottom - content.top) * it.offsetYFraction).roundToInt()
+                } ?: 0
+                val anchor = style?.anchor ?: SubtitleAnchor.BOTTOM_CENTER
+                val boxLeft = when (anchor) {
+                    SubtitleAnchor.TOP_START,
+                    SubtitleAnchor.CENTER_START,
+                    SubtitleAnchor.BOTTOM_START,
+                    -> safe.left
+                    SubtitleAnchor.TOP_CENTER,
+                    SubtitleAnchor.CENTER,
+                    SubtitleAnchor.BOTTOM_CENTER,
+                    -> safe.left + ((safe.right - safe.left) - boxWidth) / 2
+                    SubtitleAnchor.TOP_END,
+                    SubtitleAnchor.CENTER_END,
+                    SubtitleAnchor.BOTTOM_END,
+                    -> safe.right - boxWidth
+                } + offsetX
+                val boxTop = when (anchor) {
+                    SubtitleAnchor.TOP_START,
+                    SubtitleAnchor.TOP_CENTER,
+                    SubtitleAnchor.TOP_END,
+                    -> safe.top
+                    SubtitleAnchor.CENTER_START,
+                    SubtitleAnchor.CENTER,
+                    SubtitleAnchor.CENTER_END,
+                    -> safe.top + ((safe.bottom - safe.top) - boxHeight) / 2
+                    SubtitleAnchor.BOTTOM_START,
+                    SubtitleAnchor.BOTTOM_CENTER,
+                    SubtitleAnchor.BOTTOM_END,
+                    -> safe.bottom - boxHeight
+                } + offsetY
+
+                val box = runCatching {
+                    PixelRect(boxLeft, boxTop, boxLeft + boxWidth, boxTop + boxHeight)
+                }.getOrNull() ?: return@forEach
+                val placedInk = runCatching {
+                    PixelRect(
+                        left = box.left + paddingX,
+                        top = box.top + paddingY,
+                        right = box.left + paddingX + inkWidth,
+                        bottom = box.top + paddingY + inkHeight,
+                    )
+                }.getOrNull() ?: return@forEach
                 if (!safe.contains(placedInk) || !safe.contains(box)) return@forEach
 
                 val descriptor = SubtitleLayoutDescriptor(
@@ -119,23 +187,45 @@ class SubtitleLayoutEngine(
         return SubtitleLayoutResult.Overflow("NO_LEGAL_LAYOUT_WITHIN_FONT_FLOOR")
     }
 
-    private fun buildLayout(
+    internal fun buildLayout(
         displayText: String,
         semanticText: String,
         width: Int,
         fontPx: Int,
         typeface: Typeface,
+        effectiveConfig: SubtitleLayoutConfig = config,
+        style: SubtitleStyle? = null,
     ): StaticLayout {
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             this.typeface = typeface
             textSize = fontPx.toFloat()
             color = Color.WHITE
+            if (style != null) {
+                val outline = AuthoredSubtitleStyleLayout.outlineWidthPx(style, fontPx)
+                if (outline > 0f) {
+                    this.style = Paint.Style.FILL_AND_STROKE
+                    strokeWidth = outline * 2f
+                }
+                if (style.shadowEnabled) {
+                    setShadowLayer(
+                        AuthoredSubtitleStyleLayout.shadowRadiusPx(style, fontPx),
+                        0f,
+                        AuthoredSubtitleStyleLayout.shadowOffsetYPx(style, fontPx),
+                        Color.BLACK,
+                    )
+                }
+            }
         }
         val direction = if (opaqueLtrOnly(semanticText)) TextDirectionHeuristics.LTR else TextDirectionHeuristics.RTL
+        val alignment = when (style?.alignment ?: SubtitleTextAlignment.CENTER) {
+            SubtitleTextAlignment.START -> Layout.Alignment.ALIGN_NORMAL
+            SubtitleTextAlignment.CENTER -> Layout.Alignment.ALIGN_CENTER
+            SubtitleTextAlignment.END -> Layout.Alignment.ALIGN_OPPOSITE
+        }
         return StaticLayout.Builder.obtain(displayText, 0, displayText.length, paint, width)
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
+            .setAlignment(alignment)
             .setIncludePad(true)
-            .setLineSpacing(0f, config.lineSpacingMultiplier)
+            .setLineSpacing(0f, effectiveConfig.lineSpacingMultiplier)
             .setTextDirection(direction)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
@@ -188,4 +278,3 @@ class SubtitleLayoutEngine(
         return !hasArabic && (text.contains("://") || text.contains('@') || text.startsWith('`'))
     }
 }
-
