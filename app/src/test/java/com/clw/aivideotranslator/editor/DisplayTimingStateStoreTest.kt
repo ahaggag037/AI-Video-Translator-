@@ -31,6 +31,77 @@ class DisplayTimingStateStoreTest {
         }
     }
 
+    @Test fun invalidRawFieldDraftSurvivesReopenWithoutBecomingExportTruth() {
+        val root = root()
+        try {
+            val store = store(root)
+            store.setPendingFieldDraft(
+                sessionId = "s1",
+                unitId = "u1",
+                startText = "00:02.500",
+                endText = "00:02.000",
+            )
+
+            val reopened = store(root).readUnit("s1", "u1")
+            assertEquals(
+                TimingFieldDraft("00:02.500", "00:02.000"),
+                reopened.pendingFieldDraft,
+            )
+            assertNull(reopened.pendingDraft)
+            assertEquals(source, reopened.exportInterval(source))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun rawFieldDraftCommitParsesAndValidatesBeforeChangingExportTruth() {
+        val root = root()
+        try {
+            val store = store(root)
+            store.setPendingFieldDraft("s1", "u1", "00:01.100", "00:01.900")
+            store.commitPendingFieldDraft(
+                sessionId = "s1",
+                unitId = "u1",
+                sourceInterval = source,
+                videoDurationUs = 5_000_000L,
+                previousEffectiveEndUs = 900_000L,
+                nextEffectiveStartUs = 2_500_000L,
+            )
+
+            val reopened = store(root).readUnit("s1", "u1")
+            assertNull(reopened.pendingFieldDraft)
+            assertNull(reopened.pendingDraft)
+            assertEquals(DisplayTimingInterval(1_100_000L, 1_900_000L), reopened.committedOverride)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun invalidRawFieldDraftCannotCommitAndRemainsRecoverable() {
+        val root = root()
+        try {
+            val store = store(root)
+            store.setPendingFieldDraft("s1", "u1", "bad", "00:01.900")
+
+            assertThrows(IllegalArgumentException::class.java) {
+                store.commitPendingFieldDraft(
+                    sessionId = "s1",
+                    unitId = "u1",
+                    sourceInterval = source,
+                    videoDurationUs = 5_000_000L,
+                    previousEffectiveEndUs = null,
+                    nextEffectiveStartUs = null,
+                )
+            }
+
+            val reopened = store(root).readUnit("s1", "u1")
+            assertEquals(TimingFieldDraft("bad", "00:01.900"), reopened.pendingFieldDraft)
+            assertNull(reopened.committedOverride)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun validCommittedOverrideBecomesExportTruth() {
         val root = root()
         try {
@@ -65,6 +136,7 @@ class DisplayTimingStateStoreTest {
 
             val reopened = store(root).readUnit("s1", "u1")
             assertNull(reopened.pendingDraft)
+            assertNull(reopened.pendingFieldDraft)
             assertNull(reopened.committedOverride)
             assertEquals(source, reopened.exportInterval(source))
         } finally {
