@@ -12,6 +12,8 @@ internal enum class ProductRoute {
     AI_SETUP,
     PROCESSING,
     PROVIDER_RECOVERY,
+    SOURCE_RECOVERY,
+    LOCAL_RECOVERY,
     EDITOR_TEXT,
     EDITOR_TIMING,
     STYLE_STUDIO,
@@ -40,6 +42,9 @@ internal sealed interface ProductNavigationEvent {
     data object BackHomeFromResult : ProductNavigationEvent
     data object ProviderOutcomeUnknown : ProductNavigationEvent
     data object KeepProviderStateAndReturn : ProductNavigationEvent
+    data object OpenSourceRecovery : ProductNavigationEvent
+    data object OpenLocalRecovery : ProductNavigationEvent
+    data object BackHomeFromRecovery : ProductNavigationEvent
 }
 
 internal class ProductNavigator(
@@ -72,6 +77,9 @@ internal class ProductNavigator(
             ProductNavigationEvent.BackHomeFromResult -> ProductRoute.HOME
             ProductNavigationEvent.ProviderOutcomeUnknown -> ProductRoute.PROVIDER_RECOVERY
             ProductNavigationEvent.KeepProviderStateAndReturn -> ProductRoute.HOME
+            ProductNavigationEvent.OpenSourceRecovery -> ProductRoute.SOURCE_RECOVERY
+            ProductNavigationEvent.OpenLocalRecovery -> ProductRoute.LOCAL_RECOVERY
+            ProductNavigationEvent.BackHomeFromRecovery -> ProductRoute.HOME
         }
     }
 }
