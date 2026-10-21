@@ -1,6 +1,7 @@
 package com.clw.aivideotranslator
 
 import android.app.Application
+import com.clw.aivideotranslator.editor.DisplayTimingStateStore
 import com.clw.aivideotranslator.editor.EditorTextStateStore
 import com.clw.aivideotranslator.session.ActiveSessionRegistry
 import com.clw.aivideotranslator.session.SessionManifest
@@ -25,6 +26,13 @@ class AiVideoTranslatorApplication : Application() {
 
     internal val editorTextStates: EditorTextStateStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         EditorTextStateStore(
+            sessionsRoot = translationSessionRoot,
+            validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
+        )
+    }
+
+    internal val displayTimingStates: DisplayTimingStateStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        DisplayTimingStateStore(
             sessionsRoot = translationSessionRoot,
             validateSession = { sessionId -> translationSessions.readManifest(sessionId); Unit },
         )
