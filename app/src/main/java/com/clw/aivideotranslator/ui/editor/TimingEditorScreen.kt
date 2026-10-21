@@ -1,8 +1,6 @@
 package com.clw.aivideotranslator.ui.editor
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,7 +24,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
@@ -81,16 +78,6 @@ internal fun TimingEditorScreen(
                     .widthIn(max = 720.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("معاينة الفيديو", color = Color.White)
-                }
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -109,7 +96,7 @@ internal fun TimingEditorScreen(
                 if (!presentation.sourceAvailable) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            text = "التوقيت غير متاح حتى إعادة ربط مصدر الفيديو.",
+                            text = "التوقيت غير متاح حتى اختيار مصدر فيديو جديد.",
                             modifier = Modifier.padding(16.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -192,11 +179,10 @@ internal fun TimingEditorScreen(
                     ) { Text("+") }
                 }
 
-                OutlinedButton(
-                    onClick = onPlayCue,
-                    enabled = presentation.sourceAvailable,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("تشغيل هذا المقطع") }
+                Text(
+                    text = "للمعاينة بالصوت والصورة افتح «ملء الشاشة» من محرر النص؛ المعاينة تستخدم نفس رسومات التصدير.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 OutlinedButton(
                     onClick = onResetToSource,
