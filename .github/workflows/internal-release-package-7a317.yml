@@ -1,0 +1,88 @@
+name: Internal Release Package 7a317221
+
+on:
+  push:
+    branches: [ 'build/path-a-recovery-correction' ]
+    paths:
+      - '.github/workflows/internal-release-package-7a317.yml'
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 7a31722156a65dc7646f30d8ba8bc984a8b435c5
+
+      - name: Assert exact release anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "7a31722156a65dc7646f30d8ba8bc984a8b435c5"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Preserve release fail-closed contract while enabling internal unsigned packaging
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('app/build.gradle.kts')
+          text = path.read_text()
+          block = '''// Never allow an unsigned release artifact to be mistaken for a user-ready APK.
+          // Debug builds remain unaffected; every release pre-build must prove signing readiness first.
+          tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+              dependsOn(verifyReleaseSigningReady)
+          }
+          '''
+          if block not in text:
+              raise SystemExit('release signing guard block not found; refuse to package')
+          path.write_text(text.replace(block, ''))
+
+      - name: Build unsigned release APK
+        run: gradle --stacktrace assembleRelease
+
+      - name: Verify exact unsigned release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          test -n "$APK"
+          test -s "$APK"
+          if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"; then
+            echo 'Expected unsigned APK, but signature verification succeeded' >&2
+            exit 1
+          fi
+          if "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -q 'application-debuggable'; then
+            echo 'Release APK is debuggable' >&2
+            exit 1
+          fi
+          BADGING="$($ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$APK")"
+          printf '%s\n' "$BADGING" | grep -q "package: name='com.clw.aivideotranslator' versionCode='7' versionName='1.0.0'"
+          REVISION="$(unzip -p "$APK" META-INF/version-control-info.textproto)"
+          printf '%s\n' "$REVISION" | grep -q 'revision: "7a31722156a65dc7646f30d8ba8bc984a8b435c5"'
+          mkdir -p release-package
+          cp "$APK" release-package/AI-Video-Translator-1.0.0-release-unsigned-7a317221.apk
+          sha256sum release-package/AI-Video-Translator-1.0.0-release-unsigned-7a317221.apk > release-package/AI-Video-Translator-1.0.0-release-unsigned-7a317221.apk.sha256
+          printf '%s\n' "$BADGING" > release-package/aapt-badging.txt
+          printf '%s\n' "$REVISION" > release-package/version-control-info.textproto
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-release-package-7a317221
+          path: release-package/
+          if-no-files-found: error
