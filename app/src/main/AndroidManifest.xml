@@ -5,6 +5,8 @@
     <application
         android:name=".AiVideoTranslatorApplication"
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="AI Video Translator"
         android:supportsRtl="true"
         android:theme="@style/Theme.AIVideoTranslator">
