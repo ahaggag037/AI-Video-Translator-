@@ -121,11 +121,7 @@ internal fun AiSetupScreen(
                         .fillMaxWidth()
                         .height(56.dp),
                 ) {
-                    Text("حفظ وبدء المعالجة")
-                }
-
-                TextButton(onClick = onHelp) {
-                    Text("مساعدة")
+                    Text("حفظ المفتاح")
                 }
             }
         }
