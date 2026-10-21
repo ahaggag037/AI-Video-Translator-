@@ -23,10 +23,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "build/path-a-recovery-correction"
-          test -f tools/apply_release_readiness_patch.py
+          test -f tools/apply_release_core_patch.py
 
-      - name: Apply guarded patch
-        run: python tools/apply_release_readiness_patch.py
+      - name: Apply guarded core patch
+        run: python tools/apply_release_core_patch.py
 
       - name: Validate patch shape
         shell: bash
@@ -35,6 +35,7 @@ jobs:
           git diff --check
           grep -q 'ProductPresentationUnitResolver.resolve' app/src/main/java/com/clw/aivideotranslator/app/ProductAppHostStyleBridge.kt
           grep -q 'ProductRoute.RESULT' app/src/main/java/com/clw/aivideotranslator/app/ProductRouteSynchronizer.kt
+          grep -q 'ProductRoute.SOURCE_REVIEW' app/src/main/java/com/clw/aivideotranslator/app/ProductRouteSynchronizer.kt
           grep -q 'exportCommittedSrtOnly' app/src/main/java/com/clw/aivideotranslator/app/ProductAppHostStyleBridge.kt
           grep -q 'BuildConfig.VERSION_NAME' app/src/main/java/com/clw/aivideotranslator/app/ProductAppHostStyleBridge.kt
 
@@ -44,9 +45,10 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm tools/apply_release_core_patch.py
           git rm tools/apply_release_readiness_patch.py
           git rm .github/workflows/internal-release-readiness-patch.yml
           git add app/src/main app/src/test
           git status --short
-          git commit -m "release: close restart recovery and dead-control gaps"
+          git commit -m "release: close restart and text-only recovery gaps"
           git push origin HEAD:build/path-a-recovery-correction
