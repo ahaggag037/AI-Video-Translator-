@@ -41,6 +41,12 @@ internal class SourceSelectionViewModel : ViewModel() {
         return request
     }
 
+    fun failActivation(ticket: CandidateProbeTicket, message: String): Boolean {
+        val accepted = flow.activationFailed(ticket, message)
+        if (accepted) publish()
+        return accepted
+    }
+
     fun reconcileDurable(durable: DurableSourceUiState): CandidateActivationOutcome {
         val before = flow.state
         val outcome = CandidateActivationSync.apply(flow, durable)
