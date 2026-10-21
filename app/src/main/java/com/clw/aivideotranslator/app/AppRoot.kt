@@ -6,6 +6,8 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import com.clw.aivideotranslator.ui.ai.AiCredentialStatus
 import com.clw.aivideotranslator.ui.ai.AiSetupScreen
+import com.clw.aivideotranslator.ui.editor.EditorTextPresentation
+import com.clw.aivideotranslator.ui.editor.EditorTextScreen
 import com.clw.aivideotranslator.ui.home.HomeScreen
 import com.clw.aivideotranslator.ui.home.HomeStatus
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentation
@@ -45,6 +47,32 @@ internal fun AppRoot(
     onKeepProviderStateAndReturn: () -> Unit = {},
     onConfirmFreshProviderAttempt: () -> Unit = {},
     onOpenProviderRecoveryDetails: () -> Unit = {},
+    editorTextPresentation: EditorTextPresentation = EditorTextPresentation(
+        sourceText = "",
+        targetText = "",
+        hasPendingDraft = false,
+        reviewRequired = false,
+        sourceMissing = false,
+        textEditingEnabled = true,
+        playbackEnabled = false,
+        fullscreenPreviewEnabled = false,
+        timingEnabled = false,
+        styleEnabled = false,
+        srtExportEnabled = false,
+        mp4ExportEnabled = false,
+    ),
+    onBackFromEditor: () -> Unit = {},
+    onEditorTargetChange: (String) -> Unit = {},
+    onCommitEditorDraft: () -> Unit = {},
+    onEditorUndo: () -> Unit = {},
+    onEditorRedo: () -> Unit = {},
+    onRestoreMachineTranslation: () -> Unit = {},
+    onEditorPlayPause: () -> Unit = {},
+    onOpenTimingEditor: () -> Unit = {},
+    onOpenStyleEditor: () -> Unit = {},
+    onOpenFullscreenPreview: () -> Unit = {},
+    onOpenExport: () -> Unit = {},
+    onExportSrtOnly: () -> Unit = {},
     showDeveloperTools: Boolean = false,
     onOpenDeveloperTools: () -> Unit = {},
 ) {
@@ -86,6 +114,22 @@ internal fun AppRoot(
                     onKeepStateAndReturn = onKeepProviderStateAndReturn,
                     onConfirmFreshAttempt = onConfirmFreshProviderAttempt,
                     onOpenDetails = onOpenProviderRecoveryDetails,
+                )
+
+                ProductRoute.EDITOR_TEXT -> EditorTextScreen(
+                    presentation = editorTextPresentation,
+                    onBack = onBackFromEditor,
+                    onTargetChange = onEditorTargetChange,
+                    onCommitDraft = onCommitEditorDraft,
+                    onUndo = onEditorUndo,
+                    onRedo = onEditorRedo,
+                    onRestoreMachine = onRestoreMachineTranslation,
+                    onPlayPause = onEditorPlayPause,
+                    onOpenTiming = onOpenTimingEditor,
+                    onOpenStyle = onOpenStyleEditor,
+                    onOpenFullscreen = onOpenFullscreenPreview,
+                    onOpenExport = onOpenExport,
+                    onExportSrtOnly = onExportSrtOnly,
                 )
             }
         }
