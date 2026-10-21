@@ -84,6 +84,7 @@ internal fun AppRoot(
         mp4ExportEnabled = false,
     ),
     onBackFromEditor: () -> Unit = {},
+    onOpenTextEditor: () -> Unit = {},
     onEditorTargetChange: (String) -> Unit = {},
     onCommitEditorDraft: () -> Unit = {},
     onEditorUndo: () -> Unit = {},
@@ -200,8 +201,8 @@ internal fun AppRoot(
                 ProductRoute.EDITOR_TIMING -> timingEditorPresentation?.let { presentation ->
                     TimingEditorScreen(
                         presentation = presentation,
-                        onBack = onOpenTextEditorOrBack(onBackFromEditor),
-                        onOpenText = onOpenTextEditorOrBack(onBackFromEditor),
+                        onBack = onOpenTextEditor,
+                        onOpenText = onOpenTextEditor,
                         onOpenStyle = onOpenStyleEditor,
                         onStartChange = onTimingStartChange,
                         onEndChange = onTimingEndChange,
@@ -218,8 +219,8 @@ internal fun AppRoot(
                 ProductRoute.STYLE_STUDIO -> styleStudioPresentation?.let { presentation ->
                     StyleStudioScreen(
                         presentation = presentation,
-                        onBack = onOpenTextEditorOrBack(onBackFromEditor),
-                        onOpenText = onOpenTextEditorOrBack(onBackFromEditor),
+                        onBack = onOpenTextEditor,
+                        onOpenText = onOpenTextEditor,
                         onOpenTiming = onOpenTimingEditor,
                         onScopeChange = onStyleScopeChange,
                         onPreset = onStylePreset,
@@ -250,7 +251,7 @@ internal fun AppRoot(
                 ProductRoute.EXPORT_CENTER -> exportCenterPresentation?.let { presentation ->
                     ExportCenterScreen(
                         presentation = presentation,
-                        onBack = onBackFromEditor,
+                        onBack = onOpenTextEditor,
                         onModeChange = onExportModeChange,
                         onEditFilename = onEditExportFilename,
                         onExport = onStartExport,
@@ -280,8 +281,6 @@ internal fun AppRoot(
         }
     }
 }
-
-private fun onOpenTextEditorOrBack(onBack: () -> Unit): () -> Unit = onBack
 
 @Composable
 private fun MissingRouteState(message: String) {
