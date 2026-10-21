@@ -2,6 +2,9 @@ package com.clw.aivideotranslator.app
 
 import android.content.Intent
 import android.net.Uri
+import com.clw.aivideotranslator.SnapshotBurnedExportSession
+import com.clw.aivideotranslator.SnapshotBurnedSubtitleExporter
+import com.clw.aivideotranslator.SubtitlePipeline
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -25,6 +28,15 @@ import com.clw.aivideotranslator.editor.EditorTextStateStore
 import com.clw.aivideotranslator.editor.SubtitleStyleDefaults
 import com.clw.aivideotranslator.editor.SubtitleStyleStateStore
 import com.clw.aivideotranslator.editor.UnitEditorTextState
+import com.clw.aivideotranslator.export.ExportEligibilityResolver
+import com.clw.aivideotranslator.export.ExportFacts
+import com.clw.aivideotranslator.export.ExportMode
+import com.clw.aivideotranslator.export.ExportResultTruth
+import com.clw.aivideotranslator.export.OutputKind
+import com.clw.aivideotranslator.export.OutputSettlement
+import com.clw.aivideotranslator.export.PersistedProductOutput
+import com.clw.aivideotranslator.export.ProductOutputNames
+import com.clw.aivideotranslator.export.ProductOutputStore
 import com.clw.aivideotranslator.presentation.BuiltInStylePreset
 import com.clw.aivideotranslator.presentation.BuiltInSubtitleStyleResolver
 import com.clw.aivideotranslator.presentation.CueStyleOverride
@@ -47,6 +59,11 @@ import com.clw.aivideotranslator.ui.editor.StyleStudioPresentation
 import com.clw.aivideotranslator.ui.editor.TimingEditorPresentation
 import com.clw.aivideotranslator.ui.editor.TimingEditorProjection
 import com.clw.aivideotranslator.ui.editor.TimingRuntimeResolver
+import com.clw.aivideotranslator.ui.export.ExportCenterPresentation
+import com.clw.aivideotranslator.ui.export.ExportProgressPresentation
+import com.clw.aivideotranslator.ui.export.ExportProgressStage
+import com.clw.aivideotranslator.ui.export.ResultPresentation
+import com.clw.aivideotranslator.ui.preview.FullscreenPreviewPresentation
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentation
 import com.clw.aivideotranslator.ui.processing.ProcessingPresentationResolver
 import com.clw.aivideotranslator.ui.processing.ProcessingResolution
@@ -93,6 +110,16 @@ internal fun ProductAppHost(
     var styleDirty by remember { mutableStateOf(false) }
     var activeVideoMetadata by remember { mutableStateOf<VideoMetadata?>(null) }
     var cueSelection by remember { mutableStateOf(cueNavigator.reconcile(emptyList())) }
+    var productPresentationBundle by remember { mutableStateOf<ProductPresentationBundle?>(null) }
+    var presentationBuildError by remember { mutableStateOf<String?>(null) }
+    var exportMode by remember { mutableStateOf(ExportMode.BOTH) }
+    var exportBaseName by remember { mutableStateOf("translated_video") }
+    var exportProgress by remember { mutableStateOf<ExportProgressPresentation?>(null) }
+    var srtOutput by remember { mutableStateOf<PersistedProductOutput?>(null) }
+    var mp4Output by remember { mutableStateOf<PersistedProductOutput?>(null) }
+    var srtSettlement by remember { mutableStateOf(OutputSettlement.NOT_REQUESTED) }
+    var mp4Settlement by remember { mutableStateOf(OutputSettlement.NOT_REQUESTED) }
+    var activeExportSession by remember { mutableStateOf<SnapshotBurnedExportSession?>(null) }
 
     val providerApiKey = credentialRecord
         ?.takeIf { it.status != CredentialStatus.REJECTED }
@@ -125,6 +152,13 @@ internal fun ProductAppHost(
         } else {
             null
         }
+        activeVideoMetadata?.displayName
+            ?.substringBeforeLast('.', missingDelimiterValue = activeVideoMetadata?.displayName.orEmpty())
+            ?.let(ProductOutputNames::base)
+            ?.takeIf(String::isNotBlank)
+            ?.let { exportBaseName = it }
+        productPresentationBundle = null
+        presentationBuildError = null
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -223,7 +257,8 @@ internal fun ProductAppHost(
 
     LaunchedEffect(durableStt.phase, durableTranslation.phase, providerApiKey) {
         if (
-            durableStt.phase == DurableSttPhase.LIVE_SUCCESS &&
+            (durableStt.phase == DurableSttPhase.LIVE_SUCCESS ||
+                (durableStt.phase == DurableSttPhase.RECOVERED && durableStt.legacyResult != null)) &&
             durableTranslation.phase == DurableTranslationPhase.IDLE &&
             providerApiKey.isNotBlank()
         ) {
@@ -344,6 +379,40 @@ internal fun ProductAppHost(
         )
     }
 
+    val fullscreenPreviewPresentation = productPresentationBundle?.let { bundle ->
+        FullscreenPreviewPresentation(
+            sourceUri = bundle.sourceUri,
+            rasterSnapshot = bundle.rasterSnapshot,
+            durationMs = bundle.durationMs,
+        )
+    }
+    val exportLayoutStatus = productPresentationBundle?.layoutStatus ?: LayoutStatus.REVIEW_REQUIRED
+    val exportEligibility = ExportEligibilityResolver.resolve(
+        ExportFacts(
+            hasCommittedText = productPresentationBundle?.cues?.isNotEmpty() == true,
+            timingValid = productPresentationBundle != null,
+            sourceAvailable = durableSource.phase == DurableSourcePhase.BOUND,
+            layoutStatus = exportLayoutStatus,
+        )
+    )
+    val exportCenterPresentation = productPresentationBundle?.let {
+        ExportCenterPresentation(
+            mode = exportMode,
+            eligibility = exportEligibility,
+            layoutStatus = exportLayoutStatus,
+            baseFileName = exportBaseName,
+        )
+    }
+    val resultPresentation = if (
+        srtSettlement != OutputSettlement.NOT_REQUESTED || mp4Settlement != OutputSettlement.NOT_REQUESTED
+    ) {
+        ResultPresentation(
+            truth = ExportResultTruth(srt = srtSettlement, mp4 = mp4Settlement),
+            srtFileName = srtOutput?.displayName,
+            mp4FileName = mp4Output?.displayName,
+        )
+    } else null
+
     val sourceReview = SourceReviewPresentation.from(candidate.state, candidate.metadata)
     val processingPresentation = when (processingResolution) {
         is ProcessingResolution.Show -> processingResolution.presentation
@@ -457,6 +526,166 @@ internal fun ProductAppHost(
         if (action is ProviderRecoveryFreshAttemptAction.StartFreshSession) {
             route = ProductRoute.PROCESSING
             sessionViewModel.selectNewSource(action.sourceUri)
+        }
+    }
+
+    fun prepareCommittedBundleAndNavigate(event: ProductNavigationEvent) {
+        val sessionId = activeSessionId ?: return
+        val sourceUri = durableSource.contentUri?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return
+        val metadata = activeVideoMetadata ?: return
+        val units = durableTranslation.liveUnits ?: return
+        val entries = durableTranslation.entries
+        if (units.isEmpty() || entries.isEmpty()) return
+        scope.launch {
+            val built = withContext(Dispatchers.IO) {
+                runCatching {
+                    ProductPresentationBundleFactory.build(
+                        context = context,
+                        sourceUri = sourceUri,
+                        metadata = metadata,
+                        units = units,
+                        entries = entries,
+                        textState = editorTextStore.read(sessionId),
+                        timingState = displayTimingStore.read(sessionId),
+                        styleState = subtitleStyleStore.read(sessionId),
+                    ).getOrThrow()
+                }
+            }
+            built.onSuccess { bundle ->
+                productPresentationBundle = bundle
+                presentationBuildError = null
+                navigate(event)
+            }.onFailure { error ->
+                productPresentationBundle = null
+                presentationBuildError = error.message ?: "تعذر تجهيز المعاينة/التصدير من الحالة الملتزمة"
+            }
+        }
+    }
+
+    fun persistedOutput(kind: OutputKind): PersistedProductOutput? = when (kind) {
+        OutputKind.SRT -> srtOutput
+        OutputKind.MP4 -> mp4Output
+    }
+
+    fun outputMime(kind: OutputKind): String = when (kind) {
+        OutputKind.SRT -> "application/x-subrip"
+        OutputKind.MP4 -> "video/mp4"
+    }
+
+    fun openOutput(kind: OutputKind) {
+        val output = persistedOutput(kind) ?: return
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(output.uri, outputMime(kind))
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        }
+    }
+
+    fun shareOutput(kind: OutputKind) {
+        val output = persistedOutput(kind) ?: return
+        runCatching {
+            val share = Intent(Intent.ACTION_SEND)
+                .setType(outputMime(kind))
+                .putExtra(Intent.EXTRA_STREAM, output.uri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            context.startActivity(Intent.createChooser(share, "مشاركة الملف"))
+        }
+    }
+
+    fun settleExport() {
+        exportProgress = null
+        activeExportSession = null
+        navigate(ProductNavigationEvent.ExportSettled)
+    }
+
+    fun startProductExport(retryKind: OutputKind? = null) {
+        val bundle = productPresentationBundle ?: return
+        val wantsSrt = retryKind == OutputKind.SRT ||
+            (retryKind == null && exportMode != ExportMode.MP4_ONLY)
+        val wantsMp4 = retryKind == OutputKind.MP4 ||
+            (retryKind == null && exportMode != ExportMode.SRT_ONLY)
+        if (!wantsSrt && !wantsMp4) return
+
+        if (retryKind == null) {
+            if (wantsSrt) { srtSettlement = OutputSettlement.NOT_REQUESTED; srtOutput = null }
+            if (wantsMp4) { mp4Settlement = OutputSettlement.NOT_REQUESTED; mp4Output = null }
+        }
+        navigate(ProductNavigationEvent.ExportStarted)
+        exportProgress = ExportProgressPresentation(
+            stage = ExportProgressStage.PREPARING_RASTERS,
+            srtAlreadyValidated = srtSettlement == OutputSettlement.SUCCESS,
+        )
+
+        scope.launch {
+            if (wantsSrt) {
+                val srtResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        ProductOutputStore.saveSrt(
+                            context = context,
+                            baseName = exportBaseName,
+                            srtUtf8 = SubtitlePipeline.srt(bundle.cues, bundle.durationMs),
+                        )
+                    }
+                }
+                srtResult.onSuccess { output ->
+                    srtOutput = output
+                    srtSettlement = OutputSettlement.SUCCESS
+                }.onFailure {
+                    srtSettlement = OutputSettlement.FAILED
+                }
+            }
+
+            if (!wantsMp4) {
+                settleExport()
+                return@launch
+            }
+
+            exportProgress = ExportProgressPresentation(
+                stage = ExportProgressStage.RENDERING,
+                srtAlreadyValidated = srtSettlement == OutputSettlement.SUCCESS,
+                cancelAvailable = true,
+            )
+            val started = runCatching {
+                SnapshotBurnedSubtitleExporter.start(
+                    context = context,
+                    sourceUri = bundle.sourceUri,
+                    snapshot = bundle.rasterSnapshot,
+                    sampleStartMs = 0L,
+                    sampleEndMs = bundle.durationMs,
+                    onCompleted = { burned ->
+                        activeExportSession = null
+                        exportProgress = ExportProgressPresentation(
+                            stage = ExportProgressStage.FINALIZING,
+                            srtAlreadyValidated = srtSettlement == OutputSettlement.SUCCESS,
+                        )
+                        scope.launch {
+                            val persisted = withContext(Dispatchers.IO) {
+                                runCatching { ProductOutputStore.saveValidatedMp4(context, exportBaseName, burned.file) }
+                            }
+                            runCatching { burned.file.delete() }
+                            persisted.onSuccess { output ->
+                                mp4Output = output
+                                mp4Settlement = OutputSettlement.SUCCESS
+                            }.onFailure {
+                                mp4Settlement = OutputSettlement.FAILED
+                            }
+                            settleExport()
+                        }
+                    },
+                    onError = {
+                        activeExportSession = null
+                        mp4Settlement = OutputSettlement.FAILED
+                        settleExport()
+                    },
+                )
+            }
+            started.onSuccess { session -> activeExportSession = session }
+                .onFailure {
+                    mp4Settlement = OutputSettlement.FAILED
+                    settleExport()
+                }
         }
     }
 
@@ -611,8 +840,16 @@ internal fun ProductAppHost(
             styleDraft = committedStyle
             navigate(ProductNavigationEvent.OpenStyleStudio)
         },
-        onOpenFullscreenPreview = { navigate(ProductNavigationEvent.OpenFullscreenPreview) },
-        onOpenExport = { navigate(ProductNavigationEvent.OpenExportCenter) },
+        onOpenFullscreenPreview = {
+            prepareCommittedBundleAndNavigate(ProductNavigationEvent.OpenFullscreenPreview)
+        },
+        onOpenExport = {
+            prepareCommittedBundleAndNavigate(ProductNavigationEvent.OpenExportCenter)
+        },
+        onExportSrtOnly = {
+            exportMode = ExportMode.SRT_ONLY
+            prepareCommittedBundleAndNavigate(ProductNavigationEvent.OpenExportCenter)
+        },
         timingEditorPresentation = timingEditorPresentation,
         onTimingStartChange = { startText ->
             timingEditorPresentation?.let { setTimingFields(startText, it.endField) }
@@ -703,13 +940,39 @@ internal fun ProductAppHost(
             updateStyleDraft { style -> style.copy(maxLines = maxOf(1, style.maxLines - 1)) }
         },
         onIncreaseMaxLines = {
-            updateStyleDraft { style -> style.copy(maxLines = minOf(4, style.maxLines + 1)) }
+            updateStyleDraft { style -> style.copy(maxLines = minOf(2, style.maxLines + 1)) }
         },
         onApplyStyle = ::applyStyleDraft,
         onCancelStyleDraft = {
             styleDraft = committedStyle
             styleDirty = false
         },
+        fullscreenPreviewPresentation = fullscreenPreviewPresentation,
+        onBackFromFullscreenPreview = { navigate(ProductNavigationEvent.BackFromFullscreenPreview) },
+        exportCenterPresentation = exportCenterPresentation,
+        onExportModeChange = { exportMode = it },
+        onEditExportFilename = {},
+        onStartExport = { startProductExport() },
+        exportProgressPresentation = exportProgress,
+        onBackFromExportProgress = {
+            if (activeExportSession == null) navigate(ProductNavigationEvent.OpenExportCenter)
+        },
+        onRequestExportCancel = {
+            activeExportSession?.cancel()
+            activeExportSession = null
+            if (mp4Settlement != OutputSettlement.SUCCESS) mp4Settlement = OutputSettlement.CANCELLED
+            settleExport()
+        },
+        onRetryFailedOutput = {
+            val retry = ExportResultTruth(srtSettlement, mp4Settlement).retryableOutputs().firstOrNull()
+            if (retry != null) startProductExport(retry)
+        },
+        resultPresentation = resultPresentation,
+        onBackHomeFromResult = { navigate(ProductNavigationEvent.BackHomeFromResult) },
+        onOpenResultOutput = ::openOutput,
+        onShareResultOutput = ::shareOutput,
+        onLocateResultOutput = ::openOutput,
+        onRetryResultOutput = { startProductExport(it) },
         onBackFromSettings = { navigate(ProductNavigationEvent.BackHomeFromSecondary) },
         onOpenDiagnostics = { navigate(ProductNavigationEvent.OpenDiagnostics) },
         onBackFromDiagnostics = { navigate(ProductNavigationEvent.BackHomeFromSecondary) },
