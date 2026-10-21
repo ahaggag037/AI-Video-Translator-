@@ -1,5 +1,6 @@
 package com.clw.aivideotranslator.subtitle.android
 
+import com.clw.aivideotranslator.presentation.SubtitleStyle
 import java.io.Closeable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
@@ -16,7 +17,12 @@ import java.util.concurrent.TimeoutException
  */
 class RasterCoordinator(
     private val producer: SubtitleRasterProducer = SubtitleRasterProducer { request ->
-        SubtitleRasterizer().rasterize(request.descriptor, request.geometry, request.font)
+        SubtitleRasterizer().rasterize(
+            request.descriptor,
+            request.geometry,
+            request.font,
+            request.style,
+        )
     },
     private val maxCacheBytes: Long = MAX_CACHE_BYTES,
     private val waitBudgetMs: Long = DEFAULT_WAIT_BUDGET_MS,
@@ -50,7 +56,7 @@ class RasterCoordinator(
                 var existing = entries[request.requestId]
                 if (existing != null) {
                     require(existing.request.sameIdentityAs(request)) {
-                        "raster request id collision with different descriptor/profile"
+                        "raster request id collision with different descriptor/profile/style"
                     }
                     if (existing.retryable && existing.completion.isDone && existing.leaseCount == 0) {
                         recycleEntryLocked(existing)
@@ -241,6 +247,7 @@ data class RasterRequest(
     val descriptor: SubtitleLayoutDescriptor,
     val geometry: FrameGeometry,
     val font: LoadedSubtitleFont,
+    val style: SubtitleStyle? = null,
 ) {
     init { require(requestId.isNotBlank()) }
 
@@ -248,7 +255,8 @@ data class RasterRequest(
         requestId == other.requestId &&
             descriptor == other.descriptor &&
             geometry == other.geometry &&
-            font.profile == other.font.profile
+            font.profile == other.font.profile &&
+            style == other.style
 }
 
 class RasterLease internal constructor(
