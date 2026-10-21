@@ -1,6 +1,7 @@
 package com.clw.aivideotranslator.ui.editor
 
 import com.clw.aivideotranslator.editor.DisplayTimingInterval
+import com.clw.aivideotranslator.editor.TimingFieldDraft
 import com.clw.aivideotranslator.editor.UnitDisplayTimingState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -47,6 +48,28 @@ class TimingEditorProjectionTest {
         assertEquals("00:02.300", presentation.endField)
         assertTrue(presentation.dirty)
         assertTrue(presentation.validation.isValid)
+    }
+
+    @Test fun rawInvalidFieldDraftIsShownExactlyAndValidatedWithoutBecomingIntervalTruth() {
+        val presentation = TimingEditorProjection.resolve(
+            sourceInterval = source,
+            state = UnitDisplayTimingState(
+                pendingFieldDraft = TimingFieldDraft(
+                    startText = "00:03.000",
+                    endText = "bad",
+                ),
+            ),
+            videoDurationUs = 5_000_000L,
+            previousEffectiveEndUs = 900_000L,
+            nextEffectiveStartUs = 4_000_000L,
+            sourceAvailable = true,
+        )
+
+        assertEquals("00:03.000", presentation.startField)
+        assertEquals("bad", presentation.endField)
+        assertTrue(presentation.dirty)
+        assertFalse(presentation.validation.isValid)
+        assertTrue(TimingDraftError.END_INVALID in presentation.validation.errors)
     }
 
     @Test fun neighborOverlapIsReflectedInPresentationValidation() {
