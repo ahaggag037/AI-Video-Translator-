@@ -13,8 +13,16 @@ import org.json.JSONObject
 internal data class ManualTextRevision(
     val id: String,
     val text: String,
+    val basedOnSourceTextHash: String,
     val basedOnMachineTextHash: String,
-)
+) {
+    init {
+        require(id.isNotBlank())
+        require(text.isNotBlank())
+        require(basedOnSourceTextHash.isNotBlank())
+        require(basedOnMachineTextHash.isNotBlank())
+    }
+}
 
 internal data class UnitEditorTextState(
     val revisions: List<ManualTextRevision> = emptyList(),
@@ -46,7 +54,8 @@ internal data class DurableEditorTextState(
 
 /**
  * Atomic sidecar under the canonical session directory. Pending text is durable recovery work;
- * only an active committed manual revision changes export truth.
+ * only an active committed manual revision changes export truth. Each committed revision records
+ * the source-text lineage it was authored against, so later source changes can never silently rebase it.
  */
 internal class EditorTextStateStore(
     private val sessionsRoot: File,
@@ -77,9 +86,8 @@ internal class EditorTextStateStore(
         machineText: String,
         draftText: String,
     ): DurableEditorTextState = mutate(sessionId, unitId) { current ->
-        val normalized = draftText
         val effectiveCommitted = current.exportText(machineText)
-        current.copy(pendingDraft = normalized.takeUnless { it == effectiveCommitted })
+        current.copy(pendingDraft = draftText.takeUnless { it == effectiveCommitted })
     }
 
     fun clearPendingDraft(sessionId: String, unitId: String): DurableEditorTextState =
@@ -88,14 +96,17 @@ internal class EditorTextStateStore(
     fun commitPendingDraft(
         sessionId: String,
         unitId: String,
+        sourceText: String,
         machineText: String,
     ): DurableEditorTextState = mutate(sessionId, unitId) { current ->
+        require(sourceText.isNotBlank()) { "source text cannot be blank when committing manual truth" }
         val pending = requireNotNull(current.pendingDraft) { "no pending manual draft" }
         require(pending.isNotBlank()) { "manual text cannot be blank" }
         val keptHistory = current.revisions.take(current.activeRevisionIndex + 1)
         val next = ManualTextRevision(
             id = "manual-${UUID.randomUUID()}",
             text = pending,
+            basedOnSourceTextHash = sha256(sourceText),
             basedOnMachineTextHash = sha256(machineText),
         )
         current.copy(
@@ -175,7 +186,8 @@ internal class EditorTextStateStore(
         val file = stateFile(sessionId)
         if (!file.isFile) return DurableEditorTextState(sessionId = sessionId)
         val root = JSONObject(file.readText(Charsets.UTF_8))
-        require(root.getInt("schemaVersion") == 1) { "unsupported editor text schema" }
+        val schemaVersion = root.getInt("schemaVersion")
+        require(schemaVersion in 1..SCHEMA_VERSION) { "unsupported editor text schema" }
         require(root.getString("sessionId") == sessionId) { "editor text session mismatch" }
         val unitsObject = root.getJSONObject("units")
         val units = buildMap {
@@ -190,6 +202,11 @@ internal class EditorTextStateStore(
                             ManualTextRevision(
                                 id = item.getString("id"),
                                 text = item.getString("text"),
+                                basedOnSourceTextHash = if (schemaVersion >= 2) {
+                                    item.getString("basedOnSourceTextHash")
+                                } else {
+                                    LEGACY_UNKNOWN_SOURCE_HASH
+                                },
                                 basedOnMachineTextHash = item.getString("basedOnMachineTextHash"),
                             ),
                         )
@@ -222,6 +239,7 @@ internal class EditorTextStateStore(
                     JSONObject()
                         .put("id", revision.id)
                         .put("text", revision.text)
+                        .put("basedOnSourceTextHash", revision.basedOnSourceTextHash)
                         .put("basedOnMachineTextHash", revision.basedOnMachineTextHash),
                 )
             }
@@ -234,7 +252,7 @@ internal class EditorTextStateStore(
             )
         }
         val payload = JSONObject()
-            .put("schemaVersion", 1)
+            .put("schemaVersion", SCHEMA_VERSION)
             .put("sessionId", state.sessionId)
             .put("revision", state.revision)
             .put("units", units)
@@ -276,6 +294,8 @@ internal class EditorTextStateStore(
 
     companion object {
         private const val FILE_NAME = "editor_text.json"
+        private const val SCHEMA_VERSION = 2
+        private const val LEGACY_UNKNOWN_SOURCE_HASH = "legacy-unknown-source-lineage"
         private val SAFE_ID = Regex("[A-Za-z0-9._-]+")
     }
 }
