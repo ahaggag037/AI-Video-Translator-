@@ -18,15 +18,23 @@ internal object TimingEditorProjection {
         val rawFields = state.pendingFieldDraft
         val startField = rawFields?.startText ?: formatTimecodeUs(visible.startUs)
         val endField = rawFields?.endText ?: formatTimecodeUs(visible.endUs)
-        val validation = TimingDraftValidator.validate(
-            TimingDraft(
-                startText = startField,
-                endText = endField,
-                durationMs = videoDurationUs?.floorDiv(1_000L),
-                previousEffectiveEndMs = previousEffectiveEndUs?.floorDiv(1_000L),
-                nextEffectiveStartMs = nextEffectiveStartUs?.floorDiv(1_000L),
-            ),
-        )
+        val startUs = parseTimecodeUs(startField)
+        val endUs = parseTimecodeUs(endField)
+        val validation = if (startUs == null || endUs == null) {
+            TimingDraftValidation(
+                buildSet {
+                    if (startUs == null) add(TimingDraftError.START_INVALID)
+                    if (endUs == null) add(TimingDraftError.END_INVALID)
+                },
+            )
+        } else {
+            TimingDraftValidator.validate(
+                draft = TimingDraft(startUs = startUs, endUs = endUs),
+                videoDurationUs = videoDurationUs,
+                previousEffectiveEndUs = previousEffectiveEndUs,
+                nextEffectiveStartUs = nextEffectiveStartUs,
+            )
+        }
         return TimingEditorPresentation(
             startField = startField,
             endField = endField,
