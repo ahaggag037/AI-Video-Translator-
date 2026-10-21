@@ -5,6 +5,7 @@ import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.Locale
 import org.json.JSONObject
 
 data class DisplayTimingInterval(
@@ -17,9 +18,15 @@ data class DisplayTimingInterval(
     }
 }
 
+data class TimingFieldDraft(
+    val startText: String,
+    val endText: String,
+)
+
 data class UnitDisplayTimingState(
     val committedOverride: DisplayTimingInterval? = null,
     val pendingDraft: DisplayTimingInterval? = null,
+    val pendingFieldDraft: TimingFieldDraft? = null,
 ) {
     fun visibleInterval(sourceInterval: DisplayTimingInterval): DisplayTimingInterval =
         pendingDraft ?: committedOverride ?: sourceInterval
@@ -65,7 +72,36 @@ class DisplayTimingStateStore(
         draft: DisplayTimingInterval,
     ): DurableDisplayTimingState = mutate(sessionId, unitId) { current ->
         val committed = current.committedOverride ?: sourceInterval
-        current.copy(pendingDraft = draft.takeUnless { it == committed })
+        current.copy(
+            pendingDraft = draft.takeUnless { it == committed },
+            pendingFieldDraft = null,
+        )
+    }
+
+    /**
+     * Persists exactly what the user typed even when it is temporarily invalid. A parsed interval is
+     * retained only when the two fields already form a valid positive interval. Neither form changes
+     * export truth until an explicit successful commit.
+     */
+    fun setPendingFieldDraft(
+        sessionId: String,
+        unitId: String,
+        startText: String,
+        endText: String,
+    ): DurableDisplayTimingState = mutate(sessionId, unitId) { current ->
+        val parsedStart = parseTimecodeUs(startText)
+        val parsedEnd = parseTimecodeUs(endText)
+        val parsedInterval = if (
+            parsedStart != null && parsedEnd != null && parsedStart >= 0L && parsedStart < parsedEnd
+        ) {
+            DisplayTimingInterval(parsedStart, parsedEnd)
+        } else {
+            null
+        }
+        current.copy(
+            pendingDraft = parsedInterval,
+            pendingFieldDraft = TimingFieldDraft(startText = startText, endText = endText),
+        )
     }
 
     fun commitPendingDraft(
@@ -77,6 +113,50 @@ class DisplayTimingStateStore(
         nextEffectiveStartUs: Long?,
     ): DurableDisplayTimingState = mutate(sessionId, unitId) { current ->
         val draft = requireNotNull(current.pendingDraft) { "no pending timing draft" }
+        commitValidated(
+            current = current,
+            draft = draft,
+            sourceInterval = sourceInterval,
+            videoDurationUs = videoDurationUs,
+            previousEffectiveEndUs = previousEffectiveEndUs,
+            nextEffectiveStartUs = nextEffectiveStartUs,
+        )
+    }
+
+    fun commitPendingFieldDraft(
+        sessionId: String,
+        unitId: String,
+        sourceInterval: DisplayTimingInterval,
+        videoDurationUs: Long?,
+        previousEffectiveEndUs: Long?,
+        nextEffectiveStartUs: Long?,
+    ): DurableDisplayTimingState = mutate(sessionId, unitId) { current ->
+        val fields = requireNotNull(current.pendingFieldDraft) { "no pending timing field draft" }
+        val startUs = requireNotNull(parseTimecodeUs(fields.startText)) { "invalid timing start field" }
+        val endUs = requireNotNull(parseTimecodeUs(fields.endText)) { "invalid timing end field" }
+        require(startUs < endUs) { "display timing start must be before end" }
+        val draft = DisplayTimingInterval(startUs, endUs)
+        commitValidated(
+            current = current,
+            draft = draft,
+            sourceInterval = sourceInterval,
+            videoDurationUs = videoDurationUs,
+            previousEffectiveEndUs = previousEffectiveEndUs,
+            nextEffectiveStartUs = nextEffectiveStartUs,
+        )
+    }
+
+    fun resetToSource(sessionId: String, unitId: String): DurableDisplayTimingState =
+        mutate(sessionId, unitId) { UnitDisplayTimingState() }
+
+    private fun commitValidated(
+        current: UnitDisplayTimingState,
+        draft: DisplayTimingInterval,
+        sourceInterval: DisplayTimingInterval,
+        videoDurationUs: Long?,
+        previousEffectiveEndUs: Long?,
+        nextEffectiveStartUs: Long?,
+    ): UnitDisplayTimingState {
         require(videoDurationUs == null || draft.endUs <= videoDurationUs) {
             "display timing exceeds video duration"
         }
@@ -86,14 +166,12 @@ class DisplayTimingStateStore(
         require(nextEffectiveStartUs == null || draft.endUs <= nextEffectiveStartUs) {
             "display timing overlaps next cue"
         }
-        current.copy(
+        return current.copy(
             committedOverride = draft.takeUnless { it == sourceInterval },
             pendingDraft = null,
+            pendingFieldDraft = null,
         )
     }
-
-    fun resetToSource(sessionId: String, unitId: String): DurableDisplayTimingState =
-        mutate(sessionId, unitId) { UnitDisplayTimingState() }
 
     private fun mutate(
         sessionId: String,
@@ -133,6 +211,7 @@ class DisplayTimingStateStore(
                     UnitDisplayTimingState(
                         committedOverride = intervalOrNull(value, "committedOverride"),
                         pendingDraft = intervalOrNull(value, "pendingDraft"),
+                        pendingFieldDraft = fieldDraftOrNull(value, "pendingFieldDraft"),
                     ),
                 )
             }
@@ -145,11 +224,20 @@ class DisplayTimingStateStore(
     }
 
     private fun intervalOrNull(owner: JSONObject, key: String): DisplayTimingInterval? {
-        if (owner.isNull(key)) return null
+        if (!owner.has(key) || owner.isNull(key)) return null
         val value = owner.getJSONObject(key)
         return DisplayTimingInterval(
             startUs = value.getLong("startUs"),
             endUs = value.getLong("endUs"),
+        )
+    }
+
+    private fun fieldDraftOrNull(owner: JSONObject, key: String): TimingFieldDraft? {
+        if (!owner.has(key) || owner.isNull(key)) return null
+        val value = owner.getJSONObject(key)
+        return TimingFieldDraft(
+            startText = value.getString("startText"),
+            endText = value.getString("endText"),
         )
     }
 
@@ -160,7 +248,8 @@ class DisplayTimingStateStore(
                 unitId,
                 JSONObject()
                     .put("committedOverride", intervalJson(value.committedOverride))
-                    .put("pendingDraft", intervalJson(value.pendingDraft)),
+                    .put("pendingDraft", intervalJson(value.pendingDraft))
+                    .put("pendingFieldDraft", fieldDraftJson(value.pendingFieldDraft)),
             )
         }
         val payload = JSONObject()
@@ -174,6 +263,10 @@ class DisplayTimingStateStore(
 
     private fun intervalJson(value: DisplayTimingInterval?): Any = value?.let {
         JSONObject().put("startUs", it.startUs).put("endUs", it.endUs)
+    } ?: JSONObject.NULL
+
+    private fun fieldDraftJson(value: TimingFieldDraft?): Any = value?.let {
+        JSONObject().put("startText", it.startText).put("endText", it.endText)
     } ?: JSONObject.NULL
 
     private fun stateFile(sessionId: String): File {
@@ -200,6 +293,38 @@ class DisplayTimingStateStore(
         }
     }
 
+    private fun parseTimecodeUs(value: String): Long? {
+        val match = TIMECODE.matchEntire(value.trim()) ?: return null
+        val minutes = match.groupValues[1].toLongOrNull() ?: return null
+        val seconds = match.groupValues[2].toLongOrNull() ?: return null
+        val millis = match.groupValues[3].toLongOrNull() ?: return null
+        if (seconds !in 0L..59L || millis !in 0L..999L) return null
+        return try {
+            Math.multiplyExact(
+                Math.addExact(
+                    Math.multiplyExact(minutes, 60_000L),
+                    Math.addExact(Math.multiplyExact(seconds, 1_000L), millis),
+                ),
+                1_000L,
+            )
+        } catch (_: ArithmeticException) {
+            null
+        }
+    }
+
+    @Suppress("unused")
+    private fun formatTimecodeUs(valueUs: Long): String {
+        require(valueUs >= 0L)
+        val totalMs = valueUs / 1_000L
+        return String.format(
+            Locale.ROOT,
+            "%02d:%02d.%03d",
+            totalMs / 60_000L,
+            (totalMs / 1_000L) % 60L,
+            totalMs % 1_000L,
+        )
+    }
+
     private fun requireSafeId(value: String) {
         require(SAFE_ID.matches(value)) { "unsafe durable timing id" }
     }
@@ -208,5 +333,6 @@ class DisplayTimingStateStore(
         const val FILE_NAME = "display_timing.json"
         const val SCHEMA_VERSION = 1
         val SAFE_ID = Regex("[A-Za-z0-9._-]+")
+        val TIMECODE = Regex("^(\\d+):(\\d{2})\\.(\\d{3})$")
     }
 }
