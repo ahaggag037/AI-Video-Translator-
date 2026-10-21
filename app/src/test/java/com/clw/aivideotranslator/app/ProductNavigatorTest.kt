@@ -82,6 +82,16 @@ class ProductNavigatorTest {
         assertEquals(ProductRoute.HOME, navigator.route)
     }
 
+    @Test fun settingsAndDiagnosticsAreSecondaryRoutesNotBottomNavigation() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.HOME)
+        navigator.onEvent(ProductNavigationEvent.OpenSettings)
+        assertEquals(ProductRoute.SETTINGS, navigator.route)
+        navigator.onEvent(ProductNavigationEvent.OpenDiagnostics)
+        assertEquals(ProductRoute.DIAGNOSTICS, navigator.route)
+        navigator.onEvent(ProductNavigationEvent.BackHomeFromSecondary)
+        assertEquals(ProductRoute.HOME, navigator.route)
+    }
+
     @Test fun backFromEditorReturnsHomeWhileDurableSessionRemainsExternal() {
         val navigator = ProductNavigator(initialRoute = ProductRoute.EDITOR_TEXT)
         navigator.onEvent(ProductNavigationEvent.BackFromEditor)
