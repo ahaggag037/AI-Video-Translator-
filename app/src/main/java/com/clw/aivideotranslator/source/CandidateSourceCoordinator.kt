@@ -119,4 +119,10 @@ internal class CandidateSourceCoordinator {
         activationSource = null
         return true
     }
+
+    fun clearCandidate() {
+        ++nextGeneration
+        activationSource = null
+        state = CandidateSourceState.Idle
+    }
 }
