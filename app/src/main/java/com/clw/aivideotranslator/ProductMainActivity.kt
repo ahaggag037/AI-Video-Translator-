@@ -23,6 +23,8 @@ class ProductMainActivity : ComponentActivity() {
                 activeSessionOwner = app.activeTranslationSession,
                 store = app.translationSessions,
                 planStore = app.translationRequestPlans,
+                fullVideoSttWindowJournal = app.fullVideoSttWindowJournal,
+                fullVideoSttAggregateStore = app.fullVideoSttAggregates,
             ),
         )[TranslationSessionViewModel::class.java]
         val sourceSelectionViewModel =

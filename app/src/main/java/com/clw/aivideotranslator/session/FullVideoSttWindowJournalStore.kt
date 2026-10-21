@@ -109,6 +109,19 @@ internal class FullVideoSttWindowJournalStore(
         }
     }
 
+    fun findSentOrNull(sessionId: String): FullVideoSttWindowReceipt? = synchronized(lock) {
+        validateSession(sessionId)
+        require(isSafeId(sessionId)) { "invalid STT window session id" }
+        val directory = File(File(sessionsRoot, sessionId), DIRECTORY)
+        if (!directory.isDirectory) return@synchronized null
+        directory.listFiles()
+            .orEmpty()
+            .asSequence()
+            .filter { it.isFile && it.extension == "properties" }
+            .map(::decode)
+            .firstOrNull { it.phase == FullVideoSttWindowPhase.SENT }
+    }
+
     fun persistSent(receipt: FullVideoSttWindowReceipt) = synchronized(lock) {
         require(receipt.phase == FullVideoSttWindowPhase.SENT) { "not a SENT receipt" }
         validateSession(receipt.sessionId)

@@ -92,7 +92,10 @@ data class DurableSttUiState(
             DurableSttPhase.LIVE_SUCCESS -> require(
                 sessionId != null && legacyResult != null && transcript == legacyResult.transcript && failure == null
             )
-            DurableSttPhase.RECOVERED -> require(sessionId != null && !transcript.isNullOrBlank() && legacyResult == null && failure == null)
+            DurableSttPhase.RECOVERED -> require(
+                sessionId != null && !transcript.isNullOrBlank() &&
+                    (legacyResult == null || transcript == legacyResult.transcript) && failure == null
+            )
             DurableSttPhase.UNKNOWN_REMOTE_OUTCOME -> require(sessionId != null && legacyResult == null && failure == null)
             DurableSttPhase.FAILED -> require(failure != null && legacyResult == null)
         }
@@ -170,6 +173,25 @@ internal fun interface DurableSttRunner {
     ): Result<SourceSnapshotOperationResult>
 }
 
+internal fun interface FullVideoSttRunner {
+    fun run(
+        context: Context,
+        store: TranslationSessionStore,
+        sessionId: String,
+        apiKey: String,
+    ): Result<FullVideoSttOperationResult>
+}
+
+private data class DurableSttRunOutcome(
+    val result: NvidiaSttResult? = null,
+    val transcriptOnly: String? = null,
+    val recoveredWithoutNetwork: Boolean = false,
+) {
+    init {
+        require((result != null) xor (transcriptOnly != null)) { "STT outcome must contain timed result or transcript-only recovery" }
+    }
+}
+
 internal data class DurableTranslationExecution(
     val units: List<LegacyParityTranslationUnit>,
     val batch: DurableTranslationBatchResult,
@@ -197,6 +219,9 @@ internal class TranslationSessionViewModel(
     private val sttRunner: DurableSttRunner = DurableSttRunner { appContext, sessionStore, sessionId, apiKey ->
         SourceSnapshotOperation.transcribeAndBindDetailed(appContext, sessionStore, sessionId, apiKey)
     },
+    private val fullVideoSttRunner: FullVideoSttRunner? = null,
+    private val fullVideoSttAggregateStore: FullVideoSttAggregateStore? = null,
+    private val fullVideoSttWindowJournalStore: FullVideoSttWindowJournalStore? = null,
     private val planStore: TranslationRequestPlanStore? = null,
     private val translationRunner: DurableTranslationRunner = DurableTranslationRunner {
             sessionStore,
@@ -359,41 +384,60 @@ internal class TranslationSessionViewModel(
                     withContext(Dispatchers.IO) {
                         check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed before STT" }
                         requireCurrentSourceGeneration(generation)
-                        val result = sttRunner.run(appContext, store, sessionId, apiKey).getOrThrow()
+                        val fullRunner = fullVideoSttRunner
+                        val execution = if (fullRunner != null) {
+                            val full = fullRunner.run(appContext, store, sessionId, apiKey).getOrThrow()
+                            DurableSttRunOutcome(
+                                result = full.result,
+                                recoveredWithoutNetwork = full.recoveredWithoutNetwork,
+                            )
+                        } else {
+                            val result = sttRunner.run(appContext, store, sessionId, apiKey).getOrThrow()
+                            when (result.delivery) {
+                                SourceSnapshotDelivery.LIVE_PROVIDER -> DurableSttRunOutcome(
+                                    result = requireNotNull(result.legacyResult),
+                                    recoveredWithoutNetwork = false,
+                                )
+                                SourceSnapshotDelivery.LOCAL_RECOVERY,
+                                SourceSnapshotDelivery.ALREADY_BOUND,
+                                -> {
+                                    val snapshot = requireNotNull(store.readActiveSourceSnapshot(sessionId))
+                                    DurableSttRunOutcome(
+                                        transcriptOnly = snapshot.transcript,
+                                        recoveredWithoutNetwork = true,
+                                    )
+                                }
+                            }
+                        }
                         requireCurrentSourceGeneration(generation)
                         check(activeSessionOwner.readActiveSessionId() == sessionId) { "active session changed after STT" }
-                        val snapshot = store.readActiveSourceSnapshot(sessionId)
-                        Pair(result, snapshot)
+                        execution
                     }
                 }
                 if (sourceGeneration.get() != generation) return@launchExclusive
                 outcome.fold(
-                    onSuccess = { (result, snapshot) ->
-                        when (result.delivery) {
-                            SourceSnapshotDelivery.LIVE_PROVIDER -> {
-                                val legacy = requireNotNull(result.legacyResult)
-                                mutableStt.value = DurableSttUiState(
-                                    phase = DurableSttPhase.LIVE_SUCCESS,
-                                    sessionId = sessionId,
-                                    transcript = legacy.transcript,
-                                    legacyResult = legacy,
-                                )
-                            }
-                            SourceSnapshotDelivery.LOCAL_RECOVERY,
-                            SourceSnapshotDelivery.ALREADY_BOUND,
-                            -> {
-                                val transcript = requireNotNull(snapshot).transcript
-                                mutableStt.value = DurableSttUiState(
-                                    phase = DurableSttPhase.RECOVERED,
-                                    sessionId = sessionId,
-                                    transcript = transcript,
-                                )
-                            }
+                    onSuccess = { execution ->
+                        val timed = execution.result
+                        mutableStt.value = if (timed != null) {
+                            DurableSttUiState(
+                                phase = if (execution.recoveredWithoutNetwork) DurableSttPhase.RECOVERED else DurableSttPhase.LIVE_SUCCESS,
+                                sessionId = sessionId,
+                                transcript = timed.transcript,
+                                legacyResult = timed,
+                            )
+                        } else {
+                            DurableSttUiState(
+                                phase = DurableSttPhase.RECOVERED,
+                                sessionId = sessionId,
+                                transcript = requireNotNull(execution.transcriptOnly),
+                            )
                         }
                     },
                     onFailure = { error ->
                         if (error is CancellationException) return@fold
-                        mutableStt.value = if (error is UnknownSttRemoteOutcomeException) {
+                        mutableStt.value = if (error is UnknownSttRemoteOutcomeException ||
+                            error is UnknownFullVideoSttRemoteOutcomeException
+                        ) {
                             DurableSttUiState(
                                 phase = DurableSttPhase.UNKNOWN_REMOTE_OUTCOME,
                                 sessionId = sessionId,
@@ -425,7 +469,7 @@ internal class TranslationSessionViewModel(
         if (
             source.phase != DurableSourcePhase.BOUND ||
             sessionId == null ||
-            sttState.phase != DurableSttPhase.LIVE_SUCCESS ||
+            (sttState.phase != DurableSttPhase.LIVE_SUCCESS && sttState.phase != DurableSttPhase.RECOVERED) ||
             sttState.sessionId != sessionId ||
             liveStt == null ||
             durablePlanStore == null
@@ -562,13 +606,19 @@ internal class TranslationSessionViewModel(
             return
         }
         val durable = withContext(Dispatchers.IO) {
-            Pair(
+            Triple(
                 runCatching { store.readActiveSourceAttachment(sessionId) }.getOrNull(),
                 runCatching { store.readActiveSourceSnapshot(sessionId) }.getOrNull(),
+                Pair(
+                    runCatching { fullVideoSttAggregateStore?.readOrNull(sessionId) }.getOrNull(),
+                    runCatching { fullVideoSttWindowJournalStore?.findSentOrNull(sessionId) }.getOrNull(),
+                ),
             )
         }
         val attachment = durable.first
         val snapshot = durable.second
+        val aggregate = durable.third.first
+        val fullVideoUnknownSent = durable.third.second
         if (attachment != null) {
             val sourceFailure = sourceFailureFor(controllerState.assessment?.source?.availability)
             mutableDurableSource.value = if (sourceFailure == null) {
@@ -586,6 +636,10 @@ internal class TranslationSessionViewModel(
                 )
             }
             mutableStt.value = when {
+                fullVideoUnknownSent != null -> DurableSttUiState(
+                    phase = DurableSttPhase.UNKNOWN_REMOTE_OUTCOME,
+                    sessionId = sessionId,
+                )
                 controllerState.blocker == SessionBlocker.STT_UNKNOWN_REMOTE_OUTCOME -> DurableSttUiState(
                     phase = DurableSttPhase.UNKNOWN_REMOTE_OUTCOME,
                     sessionId = sessionId,
@@ -595,6 +649,17 @@ internal class TranslationSessionViewModel(
                     phase = DurableSttPhase.FAILED,
                     sessionId = sessionId,
                     failure = DurableSttFailure.RESTORE,
+                )
+                aggregate != null && aggregate.sourceAttachmentId != attachment.attachmentId -> DurableSttUiState(
+                    phase = DurableSttPhase.FAILED,
+                    sessionId = sessionId,
+                    failure = DurableSttFailure.RESTORE,
+                )
+                aggregate != null -> DurableSttUiState(
+                    phase = DurableSttPhase.RECOVERED,
+                    sessionId = sessionId,
+                    transcript = aggregate.result.transcript,
+                    legacyResult = aggregate.result,
                 )
                 snapshot != null -> DurableSttUiState(
                     phase = DurableSttPhase.RECOVERED,
@@ -804,6 +869,8 @@ internal class TranslationSessionViewModel(
         private val activeSessionOwner: ActiveSessionOwner,
         private val store: TranslationSessionStore,
         private val planStore: TranslationRequestPlanStore,
+        private val fullVideoSttWindowJournal: FullVideoSttWindowJournalStore? = null,
+        private val fullVideoSttAggregateStore: FullVideoSttAggregateStore? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -812,6 +879,14 @@ internal class TranslationSessionViewModel(
                 context = context,
                 activeSessionOwner = activeSessionOwner,
                 store = store,
+                fullVideoSttRunner = if (fullVideoSttWindowJournal != null && fullVideoSttAggregateStore != null) {
+                    FullVideoSttRunner { appContext, sessionStore, sessionId, apiKey ->
+                        FullVideoSttOperation(fullVideoSttWindowJournal, fullVideoSttAggregateStore)
+                            .run(appContext, sessionStore, sessionId, apiKey)
+                    }
+                } else null,
+                fullVideoSttAggregateStore = fullVideoSttAggregateStore,
+                fullVideoSttWindowJournalStore = fullVideoSttWindowJournal,
                 planStore = planStore,
             ) as T
         }
