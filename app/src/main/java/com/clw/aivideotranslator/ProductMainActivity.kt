@@ -33,6 +33,7 @@ class ProductMainActivity : ComponentActivity() {
                 sessionViewModel = sessionViewModel,
                 sourceSelectionViewModel = sourceSelectionViewModel,
                 editorTextStore = app.editorTextStates,
+                displayTimingStore = app.displayTimingStates,
             )
         }
     }
