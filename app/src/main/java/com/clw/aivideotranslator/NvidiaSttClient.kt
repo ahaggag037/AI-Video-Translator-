@@ -26,11 +26,15 @@ data class NvidiaSttResult(
 object NvidiaSttClient {
     const val MODEL_LABEL = "NVIDIA Parakeet CTC 1.1B (en-US)"
 
-    private val client = OkHttpClient.Builder()
+    private val client = buildHttpClient()
+
+    internal fun buildHttpClient(): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(3, TimeUnit.MINUTES)
         .writeTimeout(3, TimeUnit.MINUTES)
         .callTimeout(4, TimeUnit.MINUTES)
+        .followRedirects(NvidiaSttWireContract.FOLLOW_REDIRECTS)
+        .retryOnConnectionFailure(NvidiaSttWireContract.RETRY_ON_CONNECTION_FAILURE)
         .build()
 
     fun transcribeEnglishSample(apiKey: String, wavFile: File): Result<NvidiaSttResult> = runCatching {
