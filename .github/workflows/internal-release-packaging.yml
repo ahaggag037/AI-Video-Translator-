@@ -10,8 +10,18 @@ jobs:
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      VERIFIED_APP_SOURCE_SHA: f239372efb80f5677535a9d7779ac97fcce733a9
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove packaged app matches verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code "$VERIFIED_APP_SOURCE_SHA" HEAD -- app/
 
       - uses: actions/setup-java@v5
         with:
@@ -29,7 +39,7 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Preserve release fail-closed contract while enabling internal unsigned packaging
+      - name: Preserve repository release guard while enabling internal unsigned packaging
         shell: python
         run: |
           from pathlib import Path
@@ -48,31 +58,48 @@ jobs:
       - name: Build unsigned release APK
         run: gradle --stacktrace assembleRelease
 
-      - name: Locate and verify unsigned non-debuggable release
+      - name: Verify unsigned release artifact
         shell: bash
         run: |
           set -euo pipefail
           APK="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n1)"
           test -n "$APK"
           test -s "$APK"
+
           if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"; then
             echo 'Expected unsigned APK, but signature verification succeeded' >&2
             exit 1
           fi
-          if "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -q 'application-debuggable'; then
+
+          BADGING="$($ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$APK")"
+          printf '%s\n' "$BADGING" > aapt-badging.txt
+          grep -F "package: name='com.clw.aivideotranslator' versionCode='7' versionName='1.0.0'" aapt-badging.txt
+          if grep -q 'application-debuggable' aapt-badging.txt; then
             echo 'Release APK is debuggable' >&2
             exit 1
           fi
+
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$APK"
+
           mkdir -p release-package/signing-kit/lib
           cp "$APK" release-package/AI-Video-Translator-1.0.0-release-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" release-package/signing-kit/lib/apksigner.jar
           cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" release-package/signing-kit/apksigner
           chmod +x release-package/signing-kit/apksigner
+          cp aapt-badging.txt release-package/aapt-badging.txt
           sha256sum release-package/AI-Video-Translator-1.0.0-release-unsigned.apk > release-package/AI-Video-Translator-1.0.0-release-unsigned.apk.sha256
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging release-package/AI-Video-Translator-1.0.0-release-unsigned.apk > release-package/aapt-badging.txt
+          {
+            echo "verified_app_source_sha=$VERIFIED_APP_SOURCE_SHA"
+            echo "packaging_head_sha=$GITHUB_SHA"
+            echo "application_id=com.clw.aivideotranslator"
+            echo "version_code=7"
+            echo "version_name=1.0.0"
+            echo "debuggable=false"
+            echo "signed=false"
+          } > release-package/release-metadata.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: internal-release-package-db7e861c
+          name: internal-release-package-f239372e
           path: release-package/
           if-no-files-found: error
