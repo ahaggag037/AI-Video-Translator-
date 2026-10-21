@@ -17,6 +17,8 @@ internal sealed interface ProductNavigationEvent {
     data object ChooseVideo : ProductNavigationEvent
     data object BackFromSourceReview : ProductNavigationEvent
     data class SourceActivated(val needsAiSetup: Boolean) : ProductNavigationEvent
+    data object BackFromAiSetup : ProductNavigationEvent
+    data object AiCredentialAccepted : ProductNavigationEvent
 }
 
 internal class ProductNavigator(
@@ -34,6 +36,8 @@ internal class ProductNavigator(
             } else {
                 ProductRoute.PROCESSING
             }
+            ProductNavigationEvent.BackFromAiSetup -> ProductRoute.SOURCE_REVIEW
+            ProductNavigationEvent.AiCredentialAccepted -> ProductRoute.PROCESSING
         }
     }
 }
