@@ -14,6 +14,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.clw.aivideotranslator.VideoProbe
+import com.clw.aivideotranslator.credential.AndroidAiCredentialStore
+import com.clw.aivideotranslator.credential.CredentialStatus
+import com.clw.aivideotranslator.credential.StoredCredential
 import com.clw.aivideotranslator.editor.DisplayTimingStateStore
 import com.clw.aivideotranslator.editor.EditorTextStateStore
 import com.clw.aivideotranslator.editor.UnitEditorTextState
@@ -37,8 +40,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Product-first Activity host for Path A. The durable ViewModels/stores stay authoritative; this
- * layer owns only transient navigation, the in-memory credential, and projections for Compose.
+ * Product-first Activity host for Path A. Durable ViewModels/stores stay authoritative. Navigation
+ * and recovery coordination are transient; provider credentials are loaded from the encrypted
+ * application-owned store and are never made durable in session/project files.
  */
 @Composable
 internal fun ProductAppHost(
@@ -46,6 +50,7 @@ internal fun ProductAppHost(
     sourceSelectionViewModel: SourceSelectionViewModel,
     editorTextStore: EditorTextStateStore,
     displayTimingStore: DisplayTimingStateStore,
+    credentialStore: AndroidAiCredentialStore,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -61,13 +66,28 @@ internal fun ProductAppHost(
     val navigator = remember { ProductNavigator() }
     val cueNavigator = remember { EditorCueNavigator() }
     var route by remember { mutableStateOf(navigator.route) }
-    var apiKey by remember { mutableStateOf("") }
+    var credentialRecord by remember { mutableStateOf<StoredCredential?>(null) }
+    var credentialLoaded by remember { mutableStateOf(false) }
+    var providerRecoveryAttempt by remember { mutableStateOf<ProviderRecoveryFreshAttempt?>(null) }
+    var recoveryAfterCredentialSetup by remember { mutableStateOf(false) }
     var editorUnitState by remember { mutableStateOf(UnitEditorTextState()) }
     var cueSelection by remember { mutableStateOf(cueNavigator.reconcile(emptyList())) }
+
+    val providerApiKey = credentialRecord
+        ?.takeIf { it.status != CredentialStatus.REJECTED }
+        ?.apiKey
+        .orEmpty()
 
     fun navigate(event: ProductNavigationEvent) {
         navigator.onEvent(event)
         route = navigator.route
+    }
+
+    LaunchedEffect(credentialStore) {
+        credentialRecord = withContext(Dispatchers.IO) {
+            runCatching { credentialStore.read() }.getOrNull()
+        }
+        credentialLoaded = true
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -83,10 +103,15 @@ internal fun ProductAppHost(
         durableSource.phase,
         durableSource.sessionId,
         durableSource.contentUri,
+        credentialLoaded,
+        providerRecoveryAttempt,
     ) {
+        if (!credentialLoaded) return@LaunchedEffect
         when (sourceSelectionViewModel.reconcileDurable(durableSource)) {
             CandidateActivationOutcome.ACTIVATED -> {
-                navigate(ProductNavigationEvent.SourceActivated(needsAiSetup = apiKey.isBlank()))
+                if (providerRecoveryAttempt == null) {
+                    navigate(ProductNavigationEvent.SourceActivated(needsAiSetup = providerApiKey.isBlank()))
+                }
             }
             CandidateActivationOutcome.FAILED,
             CandidateActivationOutcome.IGNORED,
@@ -99,7 +124,7 @@ internal fun ProductAppHost(
         source = durableSource,
         stt = durableStt,
         translation = durableTranslation,
-        credentialUsable = apiKey.isNotBlank(),
+        credentialUsable = providerApiKey.isNotBlank(),
     )
 
     LaunchedEffect(runtimeFacts.reopenFacts, route) {
@@ -107,19 +132,65 @@ internal fun ProductAppHost(
     }
 
     val processingResolution = ProcessingPresentationResolver.resolve(durableStt, durableTranslation)
-    LaunchedEffect(processingResolution) {
+    LaunchedEffect(
+        processingResolution,
+        durableStt.sessionId,
+        durableSource.contentUri,
+        providerApiKey,
+    ) {
         if (processingResolution == ProcessingResolution.ProviderRecovery) {
+            providerRecoveryAttempt = ProviderRecoveryFreshAttempt.armOrNull(
+                priorSessionId = durableStt.sessionId,
+                sourceUri = durableSource.contentUri,
+                apiKey = providerApiKey,
+            )
             route = ProductRoute.PROVIDER_RECOVERY
         }
     }
 
-    LaunchedEffect(durableStt.phase, durableTranslation.phase, apiKey) {
+    LaunchedEffect(
+        durableSource.phase,
+        durableSource.sessionId,
+        providerRecoveryAttempt,
+    ) {
+        if (durableSource.phase != DurableSourcePhase.BOUND) return@LaunchedEffect
+        val attempt = providerRecoveryAttempt ?: return@LaunchedEffect
+        val transition = attempt.onBoundSession(durableSource.sessionId)
+        providerRecoveryAttempt = transition.state
+        when (val action = transition.action) {
+            is ProviderRecoveryFreshAttemptAction.SubmitStt -> {
+                route = ProductRoute.PROCESSING
+                sessionViewModel.runStt(action.apiKey)
+            }
+            is ProviderRecoveryFreshAttemptAction.StartFreshSession,
+            null,
+            -> Unit
+        }
+    }
+
+    LaunchedEffect(durableStt.phase, credentialRecord?.status) {
+        if (
+            durableStt.phase == DurableSttPhase.LIVE_SUCCESS &&
+            credentialRecord != null &&
+            credentialRecord?.status != CredentialStatus.USABLE
+        ) {
+            val refreshed = withContext(Dispatchers.IO) {
+                runCatching {
+                    credentialStore.markUsable()
+                    credentialStore.read()
+                }.getOrNull()
+            }
+            if (refreshed != null) credentialRecord = refreshed
+        }
+    }
+
+    LaunchedEffect(durableStt.phase, durableTranslation.phase, providerApiKey) {
         if (
             durableStt.phase == DurableSttPhase.LIVE_SUCCESS &&
             durableTranslation.phase == DurableTranslationPhase.IDLE &&
-            apiKey.isNotBlank()
+            providerApiKey.isNotBlank()
         ) {
-            sessionViewModel.runTranslation(apiKey)
+            sessionViewModel.runTranslation(providerApiKey)
         }
     }
 
@@ -181,10 +252,12 @@ internal fun ProductAppHost(
     }
 
     val credentialStatus = when {
-        apiKey.isBlank() -> AiCredentialStatus.MISSING
         durableStt.phase == DurableSttPhase.LIVE_SUCCESS ||
             durableTranslation.phase == DurableTranslationPhase.LIVE_SUCCESS -> AiCredentialStatus.USABLE
-        else -> AiCredentialStatus.UNVERIFIED
+        credentialRecord?.status == CredentialStatus.USABLE -> AiCredentialStatus.USABLE
+        credentialRecord?.status == CredentialStatus.REJECTED -> AiCredentialStatus.REJECTED
+        credentialRecord?.status == CredentialStatus.UNVERIFIED -> AiCredentialStatus.UNVERIFIED
+        else -> AiCredentialStatus.MISSING
     }
 
     fun adoptCandidate() {
@@ -216,6 +289,16 @@ internal fun ProductAppHost(
         }
     }
 
+    fun startFreshProviderRecovery(attempt: ProviderRecoveryFreshAttempt) {
+        val transition = attempt.confirm()
+        providerRecoveryAttempt = transition.state
+        val action = transition.action
+        if (action is ProviderRecoveryFreshAttemptAction.StartFreshSession) {
+            route = ProductRoute.PROCESSING
+            sessionViewModel.selectNewSource(action.sourceUri)
+        }
+    }
+
     AppRoot(
         route = route,
         homeStatus = runtimeFacts.homeStatus,
@@ -235,18 +318,56 @@ internal fun ProductAppHost(
         onChangeVideo = { picker.launch(arrayOf("video/*")) },
         onAdoptVideo = ::adoptCandidate,
         aiCredentialStatus = credentialStatus,
-        onBackFromAiSetup = { navigate(ProductNavigationEvent.BackFromAiSetup) },
+        onBackFromAiSetup = {
+            if (recoveryAfterCredentialSetup) {
+                recoveryAfterCredentialSetup = false
+                route = ProductRoute.PROVIDER_RECOVERY
+            } else {
+                navigate(ProductNavigationEvent.BackFromAiSetup)
+            }
+        },
         onSaveAiKeyAndStart = { key ->
-            if (key.isNotBlank()) {
-                apiKey = key
-                navigate(ProductNavigationEvent.AiCredentialAccepted)
-                sessionViewModel.runStt(key)
+            val normalized = key.trim()
+            if (normalized.isNotEmpty()) {
+                scope.launch {
+                    val saved = withContext(Dispatchers.IO) {
+                        runCatching { credentialStore.save(normalized) }.getOrNull()
+                    }
+                    if (saved != null) {
+                        credentialRecord = saved
+                        if (recoveryAfterCredentialSetup) {
+                            recoveryAfterCredentialSetup = false
+                            ProviderRecoveryFreshAttempt.armOrNull(
+                                priorSessionId = durableStt.sessionId,
+                                sourceUri = durableSource.contentUri,
+                                apiKey = saved.apiKey,
+                            )?.let(::startFreshProviderRecovery)
+                        } else {
+                            navigate(ProductNavigationEvent.AiCredentialAccepted)
+                            sessionViewModel.runStt(saved.apiKey)
+                        }
+                    }
+                }
             }
         },
         processingPresentation = processingPresentation,
         onBackFromProcessing = { route = ProductRoute.HOME },
         onKeepProviderStateAndReturn = {
+            providerRecoveryAttempt = null
+            recoveryAfterCredentialSetup = false
             navigate(ProductNavigationEvent.KeepProviderStateAndReturn)
+        },
+        onConfirmFreshProviderAttempt = {
+            val attempt = providerRecoveryAttempt
+            if (attempt != null) {
+                startFreshProviderRecovery(attempt)
+            } else if (
+                durableStt.phase == DurableSttPhase.UNKNOWN_REMOTE_OUTCOME &&
+                !durableSource.contentUri.isNullOrBlank()
+            ) {
+                recoveryAfterCredentialSetup = true
+                route = ProductRoute.AI_SETUP
+            }
         },
         editorTextPresentation = editorPresentation,
         onBackFromEditor = { navigate(ProductNavigationEvent.BackFromEditor) },
