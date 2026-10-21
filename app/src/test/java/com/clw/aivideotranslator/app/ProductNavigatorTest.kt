@@ -60,6 +60,22 @@ class ProductNavigatorTest {
         assertEquals(ProductRoute.PROCESSING, navigator.route)
     }
 
+    @Test fun processingReadyMovesToEditorWithoutDuplicatingSessionState() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.PROCESSING)
+
+        navigator.onEvent(ProductNavigationEvent.ProcessingReadyForEditor)
+
+        assertEquals(ProductRoute.EDITOR_TEXT, navigator.route)
+    }
+
+    @Test fun backFromEditorReturnsHomeWhileDurableSessionRemainsExternal() {
+        val navigator = ProductNavigator(initialRoute = ProductRoute.EDITOR_TEXT)
+
+        navigator.onEvent(ProductNavigationEvent.BackFromEditor)
+
+        assertEquals(ProductRoute.HOME, navigator.route)
+    }
+
     @Test fun unknownProviderOutcomeLeavesProcessingForDedicatedRecovery() {
         val navigator = ProductNavigator(initialRoute = ProductRoute.PROCESSING)
 
