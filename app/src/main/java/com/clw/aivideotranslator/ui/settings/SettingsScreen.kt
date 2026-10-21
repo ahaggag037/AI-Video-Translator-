@@ -6,8 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -21,11 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-internal enum class AppearancePreference {
-    SYSTEM,
-    LIGHT,
-    DARK,
-}
+internal enum class AppearancePreference { SYSTEM, LIGHT, DARK }
 
 internal data class SettingsPresentation(
     val appearance: AppearancePreference,
@@ -49,9 +43,7 @@ internal fun SettingsScreen(
         topBar = {
             TopAppBar(
                 title = { Text("الإعدادات") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) { Text("رجوع") }
-                },
+                navigationIcon = { TextButton(onClick = onBack) { Text("رجوع") } },
             )
         },
     ) { contentPadding ->
@@ -59,7 +51,6 @@ internal fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -70,38 +61,22 @@ internal fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 settingRow(
-                    title = "المظهر",
-                    detail = when (presentation.appearance) {
-                        AppearancePreference.SYSTEM -> "حسب النظام"
-                        AppearancePreference.LIGHT -> "فاتح"
-                        AppearancePreference.DARK -> "داكن"
-                    },
-                    onClick = onAppearance,
-                )
-                settingRow(
                     title = "إعداد الذكاء الاصطناعي",
-                    detail = if (presentation.aiCredentialConfigured) "تم إعداد المفتاح" else "لم يتم إعداد المفتاح",
+                    detail = if (presentation.aiCredentialConfigured) {
+                        "تم إعداد مفتاح NVIDIA"
+                    } else {
+                        "لم يتم إعداد المفتاح"
+                    },
                     onClick = onAiCredential,
                 )
                 settingRow(
-                    title = "النمط الافتراضي",
-                    detail = "يُنسخ إلى المشاريع الجديدة فقط",
-                    onClick = onDefaultStyle,
-                )
-                settingRow(
-                    title = "التخزين المؤقت",
-                    detail = presentation.cacheSummary,
-                    onClick = onClearCache,
-                )
-                settingRow(
-                    title = "بيانات المشروع",
-                    detail = "مسح الجلسة المحلية يتطلب تأكيدًا",
-                    onClick = onClearProject,
-                )
-                settingRow(
                     title = "حول وتشخيص",
-                    detail = "هوية الإصدار والحالة التقنية الآمنة والتراخيص",
+                    detail = "هوية الإصدار وحالة الجلسة والمصدر والمزود",
                     onClick = onAboutDiagnostics,
+                )
+                Text(
+                    text = "تظهر هنا فقط الإعدادات المكتملة فعليًا في الإصدار الحالي.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -109,15 +84,8 @@ internal fun SettingsScreen(
 }
 
 @Composable
-private fun settingRow(
-    title: String,
-    detail: String,
-    onClick: () -> Unit,
-) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+private fun settingRow(title: String, detail: String, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
