@@ -1,11 +1,11 @@
 package com.clw.aivideotranslator.presentation
 
-internal enum class StyleScope {
+enum class StyleScope {
     PROJECT,
     CURRENT_CUE,
 }
 
-internal enum class BuiltInStylePreset {
+enum class BuiltInStylePreset {
     CLEAR,
     SIMPLE,
     CINEMA,
@@ -13,13 +13,13 @@ internal enum class BuiltInStylePreset {
     BOX,
 }
 
-internal enum class SubtitleTextAlignment {
+enum class SubtitleTextAlignment {
     START,
     CENTER,
     END,
 }
 
-internal enum class SubtitleAnchor {
+enum class SubtitleAnchor {
     TOP_START,
     TOP_CENTER,
     TOP_END,
@@ -35,7 +35,7 @@ internal enum class SubtitleAnchor {
  * Authored style truth. Spatial fractions are relative to video content, never device/Compose pixels.
  * LINE_HEIGHT is the only vertical typography-spacing authority in V1.
  */
-internal data class SubtitleStyle(
+data class SubtitleStyle(
     val fontFamilyId: String,
     val fontWeight: Int,
     val fontSizeSp: Float,
@@ -69,7 +69,7 @@ internal data class SubtitleStyle(
 }
 
 /** Sparse field-level delta over ProjectStyle; null means inherit. */
-internal data class CueStyleOverride(
+data class CueStyleOverride(
     val fontFamilyId: String? = null,
     val fontWeight: Int? = null,
     val fontSizeSp: Float? = null,
@@ -88,7 +88,7 @@ internal data class CueStyleOverride(
     val maxLines: Int? = null,
 )
 
-internal object EffectiveSubtitleStyleResolver {
+object EffectiveSubtitleStyleResolver {
     fun resolve(project: SubtitleStyle, cueOverride: CueStyleOverride?): SubtitleStyle {
         val override = cueOverride ?: CueStyleOverride()
         return SubtitleStyle(
