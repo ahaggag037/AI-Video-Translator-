@@ -1,13 +1,10 @@
 package com.clw.aivideotranslator.ui.editor
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -25,7 +22,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.clw.aivideotranslator.presentation.BuiltInStylePreset
@@ -82,27 +78,21 @@ internal fun StyleStudioScreen(
                 modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "معاينة الترجمة",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
+                Text(
+                    text = "طبّق التغييرات ثم افتح «ملء الشاشة» من محرر النص لمعاينة الفيديو بنفس رسومات التصدير.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 if (presentation.layoutStatus != LayoutStatus.FITS) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = when (presentation.layoutStatus) {
                                 LayoutStatus.OVERFLOW -> "النص يتجاوز المساحة الآمنة. صحح النمط قبل تصدير MP4؛ تصدير SRT لا يتوقف بسبب ذلك."
-                                LayoutStatus.REVIEW_REQUIRED -> "يحتاج تخطيط الترجمة إلى مراجعة قبل تصدير MP4."
+                                LayoutStatus.REVIEW_REQUIRED -> "سيتم التحقق من التخطيط الفعلي عند فتح المعاينة أو التصدير."
                                 LayoutStatus.FITS -> ""
                             },
                             modifier = Modifier.padding(16.dp),
-                            color = MaterialTheme.colorScheme.error,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
