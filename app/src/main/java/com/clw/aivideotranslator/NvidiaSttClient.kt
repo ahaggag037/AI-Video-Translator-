@@ -56,16 +56,6 @@ object NvidiaSttClient {
         }
     }
 
-    /**
-     * Additive transport boundary for durable-session evidence plumbing. The exact sample bytes are
-     * materialized in memory and hashed BEFORE the request exists, the request streams exactly those
-     * bytes, and the redacted observation (accepted result + parser identity + UTF-8 text digest of
-     * the response + pre-send sample digest) is bound at the single response-handling point. The
-     * verbatim response body never enters the observation graph. Non-2xx handling is byte-identical
-     * in classification/message to the legacy path and never produces an observation. Legacy
-     * transcribeEnglishSample semantics/request/failure behavior are unchanged.
-     * Module-internal: the durable evidence plumbing intentionally never crosses the module boundary.
-     */
     internal fun transcribeEnglishSampleDetailed(
         apiKey: String,
         wavFile: File,
@@ -74,11 +64,9 @@ object NvidiaSttClient {
         require(cleanKey.isNotEmpty()) { "أدخل NVIDIA API Key أولًا" }
         require(wavFile.exists() && wavFile.length() > 44L) { "ملف WAV غير صالح" }
 
-        // Authoritative sample anchor: these in-memory bytes are what the request will stream.
         val sampleBytes = wavFile.readBytes()
         require(sampleBytes.size.toLong() == wavFile.length()) { "prepared WAV changed while being read" }
         val sampleSha256 = sha256Bytes(sampleBytes)
-
         val request = NvidiaSttWireContract.request(cleanKey, wavFile.name, sampleBytes)
 
         client.newCall(request).execute().use { response ->
@@ -86,11 +74,6 @@ object NvidiaSttClient {
         }
     }
 
-    /**
-     * Single response-handling point for the durable STT path. Separated from the network call so
-     * the failure/binding contract is unit-testable without a provider. Failure semantics mirror
-     * the legacy handler exactly; a non-2xx status yields an exception, never an observation.
-     */
     internal fun bindDetailedResponse(
         body: String,
         httpStatus: Int,
@@ -147,10 +130,9 @@ object NvidiaSttClient {
             .trim()
         require(transcript.isNotBlank()) { "استجابة NVIDIA لا تحتوي نص تفريغ معروف البنية" }
 
-        val normalizedWords = normalizeTimes(words)
         return NvidiaSttResult(
             transcript = transcript,
-            words = normalizedWords,
+            words = normalizeTimes(words),
             httpStatus = httpStatus,
         )
     }
@@ -174,26 +156,18 @@ object NvidiaSttClient {
         }
     }
 
-    private fun normalizeTimes(raw: List<RawWord>): List<NvidiaWord> {
-        if (raw.isEmpty()) return emptyList()
-        val maxObserved = raw.mapNotNull { it.end ?: it.start }.maxOrNull() ?: 0.0
-        // Riva's ASR protobuf describes word offsets in milliseconds. Some HTTP/realtime
-        // representations use seconds, so keep a small compatibility guard for values
-        // that are clearly second-scale for a one-minute prototype sample.
-        val valuesAreSeconds = maxObserved in 0.0..120.0
-
-        fun toMs(value: Double?): Long? = value?.let {
-            if (valuesAreSeconds) (it * 1_000.0).toLong() else it.toLong()
-        }
-
-        return raw.map {
-            NvidiaWord(
-                text = it.text,
-                startMs = toMs(it.start),
-                endMs = toMs(it.end),
-                confidence = it.confidence,
-            )
-        }
+    /**
+     * NVIDIA Riva ASR WordInfo defines start_time/end_time as millisecond offsets relative to the
+     * beginning of the submitted audio. Do not infer seconds from numeric magnitude: short valid
+     * millisecond offsets such as 80..100 would otherwise be corrupted by a 1000x heuristic.
+     */
+    private fun normalizeTimes(raw: List<RawWord>): List<NvidiaWord> = raw.map { word ->
+        NvidiaWord(
+            text = word.text,
+            startMs = word.start?.toLong(),
+            endMs = word.end?.toLong(),
+            confidence = word.confidence,
+        )
     }
 
     private fun JSONObject.optNullableDouble(name: String): Double? {
